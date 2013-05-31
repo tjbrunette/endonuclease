@@ -1,0 +1,68 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use lib '/work/tex/src/cm_scripts/perl_lib';
+
+use List::Util qw/ shuffle /;
+use Getopt::Long;
+use Data::Dumper::Simple;
+
+my $options = {};
+$options->{cstfile} = 0;
+$options->{delta}   = 2;
+&GetOptions(
+	$options,
+	'cstfile=s',
+	'delta=i',
+);
+
+if ( !$options->{cstfile} || !-f $options->{cstfile} ) {
+	die "Error: need a valid -cstfile! (given $options->{cstfile})\n";
+}
+
+my @csts;
+open FILE, "<$options->{cstfile}" or die $!;
+while ( my $line = <FILE> ) {
+	if ( $line =~ /^AtomPair/ ) {
+		chomp $line;
+		my ($tag,$atomi,$resi,$atomj,$resj,$rest) = split /\s+/, $line;
+		push @csts, { resi => $resi, resj => $resj, line => $line };
+	}
+}
+close FILE or die $!;
+
+# algorithm: pick a random constraint, add it to the pool.
+# if the constraint is further than delta residues of another constraint, add
+# it.
+#print "shuffling csts ... ";
+@csts = shuffle @csts;
+#print "done.\n";
+my @added_csts;
+
+#print "picking csts ... ";
+foreach my $cst (@csts) {
+	my @intersecting_csts =
+		grep { 
+			abs( $cst->{resi} - $_->{resi} ) < $options->{delta} &&
+			abs( $cst->{resj} - $_->{resj} ) < $options->{delta} 
+		}
+		@added_csts;
+
+	if ( scalar(@intersecting_csts) == 0 ) {
+		push @added_csts, $cst;
+
+		# add other csts with the same resi and resj
+		my @other_csts = grep {
+			$cst->{resi} == $_->{resi} && $cst->{resj} == $_->{resj}
+		} @csts;
+		push @added_csts, @other_csts;
+	}
+}
+#print "done.\n";
+
+print "# constraints filtered from $options->{cstfile}\n";
+foreach my $cst (@added_csts) {
+	print $cst->{line}, "\n";
+}

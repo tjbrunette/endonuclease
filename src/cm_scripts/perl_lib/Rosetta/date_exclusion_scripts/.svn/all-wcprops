@@ -1,0 +1,23 @@
+K 25
+svn:wc:ra_dav:version-url
+V 79
+/source/!svn/ver/40892/trunk/cm_scripts/perl_lib/Rosetta/date_exclusion_scripts
+END
+get_entries.pl
+K 25
+svn:wc:ra_dav:version-url
+V 94
+/source/!svn/ver/40892/trunk/cm_scripts/perl_lib/Rosetta/date_exclusion_scripts/get_entries.pl
+END
+combine_entries.rb
+K 25
+svn:wc:ra_dav:version-url
+V 98
+/source/!svn/ver/40863/trunk/cm_scripts/perl_lib/Rosetta/date_exclusion_scripts/combine_entries.rb
+END
+README
+K 25
+svn:wc:ra_dav:version-url
+V 86
+/source/!svn/ver/40863/trunk/cm_scripts/perl_lib/Rosetta/date_exclusion_scripts/README
+END

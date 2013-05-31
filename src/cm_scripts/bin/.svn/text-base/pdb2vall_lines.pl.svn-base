@@ -1,0 +1,19 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use lib '/work/tex/src/cm_scripts/perl_lib';
+use Rosetta::Util;
+use Rosetta::Template qw/ make_vall_lines /;
+
+my $options_fn = "/work/tex/src/cm_scripts/rosetta_cm.conf";
+
+my %options;
+Rosetta::Util::load_options_from_file(
+	$options_fn, \%options,
+);
+
+foreach my $pdb (@ARGV) {
+	make_vall_lines($pdb,\%options);
+}

@@ -1,0 +1,29 @@
+#! /usr/bin/env python
+#
+# Identifies the conserved core of a set of protein structures with
+# identical sequences using maximum likelihood superposition.
+import theseus
+
+if __name__ == '__main__':
+    from argparse import ArgumentParser
+
+    parser = ArgumentParser()
+    parser.add_argument('--structures', required = True, metavar = 'S', nargs = '+', help = 'Structures to examine')
+    parser.add_argument('--threshold', type = float, default = 1.0, help = 'Variance threshold')
+    parser.add_argument('--pymol', help = 'PyMol selection command')
+    parser.add_argument('--min_length', type = int, default = 0, help = 'Minimum number of residues in a conserved region')
+    options = vars(parser.parse_args())
+
+    theseus.cleanup()
+    theseus.superimpose(options['structures'])
+
+    variances = theseus.per_residue_variances('theseus_variances.txt', theseus.NumberingScheme.QUERY)
+    conserved = [r for r in variances.keys() if variances[r] <= options['threshold']]
+
+    conserved = theseus.remove_short_regions(conserved, options['min_length'])
+    theseus.representative_model(conserved, 'theseus_sup.pdb', 'theseus_core.pdb')
+
+    if options['pymol']:
+        theseus.show_pymol_string(conserved, options['pymol'])
+
+    theseus.cleanup()

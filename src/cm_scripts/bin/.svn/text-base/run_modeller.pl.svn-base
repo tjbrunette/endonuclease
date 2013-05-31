@@ -1,0 +1,159 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use lib '/work/tex/src/cm_scripts/perl_lib';
+
+use Cwd qw/ getcwd abs_path /;
+use File::Path qw/ mkpath /;
+use List::Util qw/ max /;
+use Getopt::Long qw/ GetOptions /;
+use Rosetta::PDB qw/ pdb_to_seq /;
+use Rosetta::align_util qw/ read_alns /;
+use Rosetta::Sequence qw/ read_protein_fasta_fn /;
+
+my %options;
+$options{format}   = 'grishin';
+$options{aln_fn}   = 0;
+$options{fasta_fn} = 0;
+$options{modeller} = '/work/tex/install_dig/modeller9.9/bin/mod9.9';
+
+&GetOptions(
+	\%options,
+	"fasta_fn=s",
+	"aln_fn=s",
+	"format=s",
+);
+
+my @alns      = Rosetta::align_util::read_alns($options{aln_fn},$options{format});
+my $fasta_seq = Rosetta::Sequence::read_protein_fasta_fn($options{fasta_fn});
+
+foreach my $aln (@alns) {
+	my $aln_id = $aln->get_template_name;
+
+	my $working_dir = $aln_id;
+	if ( -d $working_dir ) {
+		print "skipping $aln_id as directory $working_dir already exists!\n";
+		next;
+	}
+	mkpath $working_dir;
+	my $orig_dir = getcwd;
+	chdir($working_dir);
+
+	# get the template PDB, read its sequence
+	my $pdbid = lc substr( $aln->get_template_name, 0, 4 );
+	my $chain = uc substr( $aln->get_template_name, 4, 1 );
+	if ( ! -f "$pdbid$chain.pdb" ) {
+		system( "~tex/src/cm_scripts/bin/get_pdb.py $pdbid $chain" );
+	}
+	if ( ! -f "$pdbid$chain.pdb" ) {
+		next;
+	}
+
+	my $template_seq = Rosetta::PDB::pdb_to_seq("$pdbid$chain.pdb");
+
+	# add leading/trailing sequence to alignment where necessary
+	my $full_q_seq = full_length(
+		$aln->get_query_alignment,
+		$fasta_seq,
+		$aln->get_query_start,
+	);
+	my $full_t_seq = full_length(
+		$aln->get_template_alignment,
+		$template_seq,
+		$aln->get_template_start
+	);
+
+	# pad query/template with leading -'s
+	for ( 1 .. $aln->get_template_start-1 ) {
+		$full_q_seq = '-' . $full_q_seq;
+	}
+	for ( 1 .. $aln->get_query_start-1 ) {
+		$full_t_seq = '-' . $full_t_seq;
+	}
+
+	# pad query/template with trailing -'s
+	my $max_len = max( length($full_q_seq), length($full_t_seq) );
+	for ( length($full_q_seq) .. $max_len-1 ) {
+		$full_q_seq = $full_q_seq . '-';
+	}
+	for ( length($full_t_seq) .. $max_len-1 ) {
+		$full_t_seq = $full_t_seq . '-';
+	}
+
+	my $q_len = length($fasta_seq);
+	my $t_len = length($template_seq);
+
+	my $pir_aln_fn = "alignment.$aln_id.ali";
+	open FILE, ">$pir_aln_fn" or die $!;
+	my $pir_aln = <<PIR_ALN;
+>P1;$pdbid$chain
+structureX:$pdbid$chain:1:$chain:$t_len:$chain:template:organism:resolution:r-free
+$full_t_seq*
+>P1;query
+sequence:query:1:.:$q_len:.:query:organism:resolution:r-free
+$full_q_seq*
+PIR_ALN
+
+	print FILE $pir_aln;
+	close FILE or die $!;
+
+	my $modeller_script = <<SCR;
+from modeller import *
+from modeller.automodel import *    # Load the automodel class
+
+log.verbose()
+env = environ()
+# directories for input atom files
+env.io.atom_files_directory = ['.']
+
+a = automodel(env,
+              alnfile='$pir_aln_fn',        # alignment filename
+              knowns='$pdbid$chain',        # codes of the templates
+              sequence='query',             # code of the target
+              assess_methods=assess.GA341)  # request GA341 model assessment
+
+a.starting_model = 2
+a.ending_model = 2
+a.final_malign3d = True
+
+a.make()                            # make the homology model
+SCR
+
+	my $script_fn = "model.$aln_id.py";
+	open FILE, ">model.$aln_id.py" or die $!;
+	print FILE $modeller_script, "\n";
+	close FILE or die $!;
+
+	print "running modeller for $aln_id ... ";
+	system( "$options{modeller} $script_fn" );
+	print "done.\n";
+
+	my $result_fn = "query.B99990002.pdb";
+	if ( ! -f $result_fn ) {
+		warn "Error running Modeller: $result_fn doesn't exist!\n";
+	}
+	system( "mv $result_fn $aln_id.modeller.pdb" );
+
+	chdir( $orig_dir );
+}
+
+sub full_length {
+	my $aln_seq   = shift;
+	my $full_seq  = shift;
+	my $aln_start = shift;
+
+	my $ungapped_aln_seq = $aln_seq;
+	$ungapped_aln_seq =~ s/-//g;
+
+	my $leading_seq  = substr( $full_seq, 0, $aln_start-1 );
+	my $trailing_seq = substr( $full_seq, $aln_start + length($ungapped_aln_seq)-1 );
+
+	my $retval = join '', (
+		$leading_seq,
+		$aln_seq,
+		$trailing_seq,
+	);
+	return $retval;
+}

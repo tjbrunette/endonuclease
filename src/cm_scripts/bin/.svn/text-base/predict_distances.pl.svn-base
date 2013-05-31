@@ -1,0 +1,691 @@
+#!/usr/bin/perl
+
+use strict;
+
+use FindBin;
+
+use lib "$FindBin::Bin/../perl_lib/";
+
+use blast;
+use hhsearch;
+use alignment;
+use DistancePotential;
+use Rosetta::Util;
+use Rosetta::Instance;
+
+use List::Util qw/ min /;
+use Getopt::Long;
+use File::Path;
+use File::Basename;
+
+$|++;
+
+my $max_e_value          = 1.0;
+my $format_float         = "%6.3f";
+my $format_string        = "%6s";
+my $format_digit         = "%6d";
+my $max_templates        = 100;
+my $max_dist             = 15;
+my $output_file          = 0;
+my $native               = 0;
+my $dist_potential       = DistancePotential->new();
+my $format               = 'hhsearch';
+my $ev_map_file          = 0;
+my $weights_file          = 0;
+my $pdb_dir              = '.';
+my $weight_param         = 1;
+my $min_seqsep           = 10;
+my $derive_sc_restraints = 0;
+
+# ---------------- Options ------------------------------
+# read options from configuration file
+my %options;
+my $options_fn = assemble_path( "$FindBin::Bin/..", 'rosetta_cm.conf' );
+if ( ! -f $options_fn ) {
+	use File::Copy qw/ copy /;
+	copy( "$options_fn.example", $options_fn );
+}
+Rosetta::Util::load_options_from_file(
+	$options_fn, \%options,
+);
+$options{aln_fn} = 0;
+
+&GetOptions(
+	"native=s"        => \$native,
+	"outfile=s"       => \$output_file,
+	"max_templates=i" => \$max_templates,
+	"aln_format=s"    => \$format,
+	"ev_map_file=s"   => \$ev_map_file,
+	"weights_file=s"   => \$weights_file,
+	"pdb_dir=s"       => \$pdb_dir,
+	"weight_param=f"  => \$weight_param,
+	"min_seqsep=i"    => \$min_seqsep,
+	"max_e_value=f"   => \$max_e_value,
+	"max_dist=f",     => \$max_dist,
+);
+
+my %mini_options = (
+	mini_prefix => $options{mini_path},
+	mode        => $options{mini_compile_mode},
+	compiler    => $options{mini_compiler},
+	mini_db     => $options{mini_db_path},
+);
+
+my $aln_file   = $ARGV[0];
+my $fasta_file = $ARGV[1];
+if ( missing_file( $aln_file ) || missing_file( $fasta_file ) ) {
+	$0 = basename $0;
+	print "usage:  $0 aln_file fasta\n";
+	exit 1;
+}
+
+my %weights;
+if ( $weights_file ) {
+	%weights = read_weights_file($weights_file);
+}
+
+
+my $seq = read_fasta( $fasta_file );
+my @alignments = @{ read_alns( $aln_file, $format, $ev_map_file ) };
+my @template_pdbs;
+my $pdb_data = { path => $pdb_dir };
+my %pred_dists;  # $pred_dists{$resi}{$resj} = [ { $mean1, $sdev1 } ]
+my %sc_dists;    # $sc_dists{$resi}{$resj}
+my $template_count = 0;
+my @comments;
+
+ALIGNMENT: foreach my $aln (@alignments) {
+	my $aln_id        = $aln->get_template_name;
+	my $query_name		= substr( $aln->get_query_name, 0, 5 );
+	my $template_name = substr( $aln->get_template_name, 0, 5 );
+
+	$template_count++;
+	if ( $template_count > $max_templates ) {
+		last ALIGNMENT;
+	}
+
+	$template_name = format_id_simple( $template_name );
+
+	my $e_value = $aln->get_e_value;
+	if ( $e_value > $max_e_value ) {
+		print "e_value $e_value > $max_e_value, skipping!\n";
+		next ALIGNMENT;
+	}
+	my $log_e_value = -200;
+	if ( $e_value > 0 ) {
+		$log_e_value = log( $e_value );
+	}
+	my $prob = $aln->get_prob;
+	my $map  = $aln->map_query_template;
+
+	my $query_seq = $aln->get_query_alignment;
+	my $templ_seq = $aln->get_template_alignment;
+
+	my $ungapped_query_seq = $query_seq;
+	$ungapped_query_seq =~ s/-//g;
+	my $ungapped_templ_seq = $templ_seq;
+	$ungapped_templ_seq =~ s/-//g;
+
+	print STDERR "alignment between $query_name, $template_name ";
+	print STDERR "(e_value = $e_value) ";
+	print STDERR "(ln_e_value = $log_e_value)\n";
+	push @comments, "alignment to $template_name ln_e_value = $log_e_value)";
+
+	my $map = $aln->map_query_template;
+
+	my @pairs;
+	foreach my $resi ( 1 .. length($seq) ) {
+	foreach my $resj ( $resi+1 .. length($seq) ) {
+		if ( abs($resi-$resj) >= $min_seqsep ) {
+			push @pairs, [ $resi, $resj ];
+		}
+	}
+	}
+
+	PAIR: foreach my $pair (@pairs) {
+		my $q_resi = $pair->[0];
+		my $q_resj = $pair->[1];
+		my $t_resi = $map->{$q_resi};
+		my $t_resj = $map->{$q_resj};
+		#print "considering pair ($q_resi,$q_resj)\n";
+
+		my $prediction = {
+			mean => 18.3,
+			sdev => 7.3,
+			weight => 1,
+			template_name => $template_name,
+		};
+
+		WEIGHTS: foreach my $key ( keys %weights ) {
+			if ( $aln_id =~ /$key/ ) {
+				$prediction->{weight} = $weights{$key};
+				my $msg = "reweighting csts from $template_name with $weights{$key}\n";
+				if ( !already_printed($msg) ) {
+					warn $msg;
+				}
+				last WEIGHTS;
+			}
+		}
+
+		if ( !defined $t_resi ) { $t_resi = '-' };
+		if ( !defined $t_resj ) { $t_resj = '-' };
+		if ( $t_resi ne '-' && $t_resj ne '-' ) {
+			my $pred_dist = distance( $pdb_data, $template_name, $t_resi, $t_resj );
+
+			my $dgap_avg  = mean( [
+				$aln->get_dgap( $q_resi ),
+				$aln->get_dgap( $q_resj )
+			] );
+			my $blosum_avg = mean( [
+				$aln->get_blosum_score( $q_resi ),
+				$aln->get_blosum_score( $q_resj ),
+			] );
+			my $burial_avg = mean( [
+				burial( $pdb_data, $template_name, $t_resi ),
+				burial( $pdb_data, $template_name, $t_resj ),
+			] );
+
+			if ( $burial_avg != 0 && $pred_dist != 0 && $pred_dist <= $max_dist ) {
+				my $v = {
+					blosum_avg  => $blosum_avg,
+					burial_avg  => $burial_avg,
+					dgap_avg    => $dgap_avg,
+					log_e_value => $log_e_value,
+				};
+				if ( $pred_dist <= $max_dist ) {
+					$prediction->{mean} = $pred_dist;
+				}
+
+				# sc-sc restraints
+				if ( $q_resi == $t_resi && $q_resi == $t_resj ) {
+
+				}
+
+				my $sdev = $dist_potential->get_sdev( $v );
+				$prediction->{sdev} = $sdev;
+			}
+		}
+		push @{ $pred_dists{$q_resi}{$q_resj} }, $prediction;
+	} # PAIR
+
+	# merge redundant csts in %pred_dists
+	foreach my $resi ( keys %pred_dists ) {
+	foreach my $resj ( keys %{ $pred_dists{$resi} } ) {
+		@{ $pred_dists{$resi}{$resj} } =
+			@{ merge_redundant_csts( $pred_dists{$resi}{$resj} ) };
+	}
+	}
+	print "finished alignment ($template_name,$template_count)\n";
+} # foreach $aln
+
+if ( !$output_file ) {
+	$output_file = "$aln_file.dist_csts";
+}
+
+open FILE, ">$output_file" or die $!;
+
+# print some logging information
+print FILE "# used $template_count alignments from $aln_file.\n";
+print FILE join '', map { "# $_\n" } @comments;
+
+RESI: foreach my $resi ( sort { $a <=> $b } keys %pred_dists ) {
+RESJ: foreach my $resj ( sort { $a <=> $b } keys %{ $pred_dists{$resi} } ) {
+	my @csts    = @{ $pred_dists{$resi}{$resj} };
+	my @weights = @{ calc_sdev_weights( \@csts, $weight_param ) };
+	if ( $weights_file && -f $weights_file ) {
+		@weights = map { $_->{weight} } @csts;
+	}
+
+	my $min_dist = min map { $_->{mean} } @csts;
+	if ( $min_dist > $max_dist ) {
+		next RESJ;
+	}
+
+	# adjust sdevs to prior where necessary add weights
+	foreach my $cst (@csts) {
+		my $weight = shift @weights;
+		if ( $cst->{mean} > $max_dist ) {
+			$cst->{sdev} = 7.3;
+		}
+		$cst->{weight} = $weight;
+	}
+	# merge redundant csts
+	@csts = sort { $a->{mean} <=> $b->{mean} }
+		@{ merge_redundant_csts( \@csts ) };
+
+	my $n_csts  = scalar @csts;
+
+	my @cst_dat = (
+		'AtomPair',
+		'CA', $resi,
+		'CA', $resj,
+		'SOGFUNC'
+	);
+
+	push @cst_dat, $n_csts;
+
+	foreach my $cst (@csts) {
+	    push @cst_dat, sprintf( $format_float, $cst->{mean} );
+	    push @cst_dat, sprintf( $format_float, $cst->{sdev} );
+	    push @cst_dat, sprintf( $format_float, $cst->{weight} );
+	}
+
+	my $cst_line = join ' ', @cst_dat;
+	print FILE $cst_line, "\n";
+}
+}
+close FILE or die $!;
+
+# sc-sc restraints
+copy( $output_file, "$output_file.bb_sc" );
+open FILE, ">>$output_file.bb_sc" or die $!;
+my @sc_csts = get_sc_csts( $aln_file, \@template_pdbs );
+foreach my $line ( @sc_csts ) {
+	print FILE $line, "\n";
+}
+close FILE or die $!;
+
+exit 0;
+
+# subroutines
+
+sub read_fasta {
+	my $fn = shift;
+	open FILE, "<$fn" or die $!;
+	my @file = <FILE>;
+	close FILE or die $!;
+
+	@file = map { chomp $_; $_ } grep { !/^>/ } @file;
+	return join '', @file;
+}
+
+sub missing_file {
+	my $fn = shift;
+
+	if  ( !$fn || !-f $fn || -z $fn ) {
+		print "missing file $fn!\n";
+		return 1;
+	}
+
+	return 0;
+}
+
+sub mean {
+	my $vals = shift;
+
+	my $total = 0;
+	foreach my $d (@$vals) {
+		$total += $d;
+	}
+
+	my $mean = $total / scalar(@$vals);
+	return $mean;
+}
+
+sub merge_redundant_csts {
+	my $csts = shift;
+
+	my %merged_csts;
+	foreach my $cst (@$csts) {
+		$merged_csts{$cst->{mean}}{$cst->{sdev}} += $cst->{weight};
+	}
+
+	my @new_csts;
+	foreach my $mean ( keys %merged_csts ) {
+	foreach my $sdev ( keys %{ $merged_csts{$mean} } ) {
+		my $weight = $merged_csts{$mean}{$sdev};
+		push @new_csts, { mean => $mean, sdev => $sdev, weight => $weight };
+	}
+	}
+
+	#if ( scalar(@new_csts) > 2 ) {
+	#	use Data::Dumper::Simple;
+	#	print Dumper( @new_csts );
+	#	exit 1;
+	#}
+
+	if ( wantarray ) { return @new_csts; }
+	return \@new_csts;
+}
+
+sub read_weights_file {
+	my $fn = shift;
+
+	my %w;
+	open FILE, "<$fn" or die $!;
+	while ( my $line = <FILE> ) {
+		if ( $line !~ /^#/ ) {
+			chomp $line;
+			my @d = split /\s+/, $line;
+
+			die "malformed line:\n$line\n" unless $d[1] <= 1 && $d[1] >= 0;
+
+			if ( scalar(@d) == 2 ) {
+				$w{$d[0]} = $d[1];
+			}
+		}
+	}
+	if ( wantarray ) { return %w; }
+	return \%w;
+}
+
+sub read_alns {
+	my $aln_file    = shift;
+	my $aln_format  = shift;
+	my $ev_map_file = shift;
+
+	my @alns;
+	if ( $aln_format eq 'hhsearch' ) {
+		@alns = @{ hhsearch::parse_alignments( $aln_file ) };
+	} elsif ( $aln_format eq 'grishin' ) {
+		@alns = @{ alignment::parse_alignments( $aln_file ) };
+	} elsif ( $aln_format eq 'blast' ) {
+		@alns = @{ blast::parse_alignments( $aln_file ) };
+	}
+	print "read ", scalar(@alns), " from $aln_file.\n";
+
+	#print STDERR "ev_map_file = $ev_map_file\n";
+
+	if ( $ev_map_file && -f $ev_map_file ) {
+		open FILE, "<$ev_map_file" or die $!;
+		my $header = <FILE>;
+		my %ev_map;
+		while ( my $line = <FILE> ) {
+			chomp $line;
+			my ($template,$e_value) = split /\s+/, $line;
+			$ev_map{$template} = $e_value;
+			#print "$template -> $e_value\n";
+		}
+
+		foreach my $aln (@alns) {
+			my $template_name = join '', (
+				lc( substr( $aln->get_template_name, 0, 4 ) ),
+				uc( substr( $aln->get_template_name, 4, 1 ) )
+			);
+			$aln->template_name( $template_name );
+
+			if ( exists $ev_map{$template_name} ) {
+				#print "setting e-value of $template_name to ", $ev_map{$template_name}, "\n";
+				$aln->e_value( $ev_map{$template_name} );
+			}
+		}
+	}
+
+	return \@alns;
+}
+
+sub read_pdb_data {
+	my $pdb_data = shift;
+	my $id       = shift;
+
+	use constant TOO_MANY_PDBS => 50;
+	if ( scalar keys %$pdb_data > TOO_MANY_PDBS ) {
+		print STDERR "Have TOO_MANY_PDBS! Nuking memoized hash.\n";
+		#$pdb_data = {};
+		$pdb_data = { path => $pdb_dir };
+	}
+
+	my $pdb = $id;
+	if ( ! -f $pdb ) {
+		$pdb = assemble_path( $pdb_data->{path}, "$id.pdb" );
+	}
+
+	if ( ! -f $pdb ) {
+		warn "trying to get $pdb!\n";
+		my $pdbid = substr( $id, 0, 4 );
+		my $chain = substr( $id, 4, 1 );
+		use FindBin;
+		my $cmd = "$FindBin::Bin/get_pdb.py $pdbid $chain";
+		my $output = `$cmd`;
+
+		if ( ! -f $pdb ) {
+			return;
+			die "Can't find pdb $id! Tried running:\n$cmd\n";
+		}
+	}
+
+	push @template_pdbs, $pdb;
+
+	my $instance = Rosetta::Instance->new( %mini_options );
+	my $job = $instance->generate_job( "batch_distances" );
+	my $cmd = join ' ', (
+		$job->executable,
+		"-in:file:s $pdb -mute all",
+		"-dist_thresholds $max_dist ",
+		"-chemical:exclude_patches LowerDNA  UpperDNA Cterm_amidation SpecialRotamer VirtualBB ShoveBB VirtualDNAPhosphate VirtualNTerm CTermConnect sc_orbitals pro_hydroxylated_case1 pro_hydroxylated_case2 ser_phosphorylated thr_phosphorylated  tyr_phosphorylated tyr_sulfated lys_dimethylated lys_monomethylated  lys_trimethylated lys_acetylated glu_carboxylated cys_acetylated tyr_diiodinated N_acetylated C_methylamidated MethylatedProteinCterm -chemical:exclude_patches ActeylatedProteinNterm",
+		#"-dist_thresholds", 2 * $max_dist,
+		#"-min_seqsep $min_seqsep",
+	);
+	if ( !exists $ENV{ROSETTA3_DB} ) {
+		$cmd .= " -database $mini_options{mini_db}",
+	} else {
+		print "database currently set to $ENV{ROSETTA3_DB}\n";
+	}
+
+	print STDERR "reading data from $id ... ";
+	$pdb_data->{$id}{fasta} = '';
+
+	#print "cmd = $cmd\n";
+	open PDB_INPUT, "$cmd |";
+
+	my $dist_count = 0;
+	while ( my $line = <PDB_INPUT> ) {
+		chomp $line;
+		my (
+				undef,
+				$resi_idx, $resj_idx,
+				$resi, $resj,
+				$atomi, $atomj,
+				$buriali, $burialj,
+				$dist,
+				$current_id
+		) = split /\s+/, $line;
+
+		#print "line = $line\n";
+		if ( $dist < $max_dist ) {
+			$pdb_data->{$id}{distances}{$resi_idx}{$resj_idx}{$atomi}{$atomj} = $dist;
+			$pdb_data->{$id}{distances}{$resi_idx}{$resj_idx}{$atomi}{$atomj} = $dist;
+			$dist_count++;
+		}
+		$pdb_data->{$id}{burial}{$resi_idx}   = $buriali;
+		$pdb_data->{$id}{burial}{$resj_idx}   = $burialj;
+		$pdb_data->{$id}{sequence}{$resi_idx} = $resi;
+		$pdb_data->{$id}{sequence}{$resj_idx} = $resj;
+	}
+	print STDERR "have ", $dist_count, " distances for $id\n";
+	close PDB_INPUT or die $!;
+	print STDERR "finished reading data from $id.\n";
+}
+
+sub burial {
+	my $pdb_data = shift;
+	my $id       = shift;
+	my $resi     = shift;
+
+	if ( !exists $pdb_data->{$id} ) {
+		print "reading pdb data for $id ... ";
+		read_pdb_data( $pdb_data, $id );
+		print "done.\n";
+	}
+
+	my $burial = $pdb_data->{$id}{burial}{$resi};
+
+	if ( !exists $pdb_data->{$id}{burial}{$resi} ) {
+		my $msg = "Error: burial not defined for $id, residue $resi\n";
+		if ( !already_printed($msg) ) {
+			warn $msg;
+		}
+		$burial = 0;
+
+		#use Data::Dumper::Simple;
+		#print Dumper($pdb_data);
+		#exit 1;
+	}
+
+	return $burial;
+}
+
+sub distance {
+	my $pdb_data = shift;
+	my $id       = shift;
+	my $resi     = shift;
+	my $resj     = shift;
+
+	if ( $resi > $resj ) {
+		my $temp = $resj;
+		$resj = $resi;
+		$resi = $temp;
+	}
+
+	if ( !exists $pdb_data->{$id} ) {
+		read_pdb_data( $pdb_data, $id );
+	}
+
+	my $dist = $pdb_data->{$id}{distances}{$resi}{$resj}{CA}{CA};
+
+	if (!exists $pdb_data->{$id}{distances}{$resi}{$resj}) {
+		$dist = 0;
+	}
+
+	return $dist;
+}
+
+
+sub get_sc_csts {
+	my $aln_fn = shift;
+	my $template_pdbs = shift;
+
+	my $template_pdb_str = join ' ', map { "-template_pdb $_" } @$template_pdbs;
+
+	my $instance = Rosetta::Instance->new( %mini_options );
+	my $job = $instance->generate_job( "template_features" );
+	my $cmd = join ' ', (
+		$job->executable,
+		"-in:file:alignment $aln_fn -cm:aln_format grishin",
+		"$template_pdb_str -mute all",
+		"-dist_thresholds $max_dist ",
+		"-chemical:exclude_patches LowerDNA  UpperDNA Cterm_amidation SpecialRotamer VirtualBB ShoveBB VirtualDNAPhosphate VirtualNTerm CTermConnect sc_orbitals pro_hydroxylated_case1 pro_hydroxylated_case2 ser_phosphorylated thr_phosphorylated  tyr_phosphorylated tyr_sulfated lys_dimethylated lys_monomethylated  lys_trimethylated lys_acetylated glu_carboxylated cys_acetylated tyr_diiodinated N_acetylated C_methylamidated MethylatedProteinCterm -chemical:exclude_patches ActeylatedProteinNterm",
+	);
+	if ( !exists $ENV{ROSETTA3_DB} ) {
+		$cmd .= " -database $mini_options{mini_db}",
+	} else {
+		print "database looks to be $ENV{ROSETTA3_DB}\n";
+	}
+
+	print STDERR "reading sc constraints data from $aln_fn ... ";
+
+	#print "cmd = $cmd\n";
+	my %sc_csts;
+	open SC_CSTS, "$cmd |";
+	my $header = <SC_CSTS>;
+	while ( my $line = <SC_CSTS> ) {
+		chomp $line;
+		my ( undef, $q_resi,$q_resj,$aa_i,$aa_j,$atomi,$atomj,$buriali,$burialj,$distance,$aln_id)
+			= split /\s+/, $line;
+		if ( $distance < 6 && $atomi ne 'CA' && $atomj ne 'CA' ) {
+			$distance = sprintf( "%4.1f", $distance );
+			push @{ $sc_csts{$q_resi}{$q_resj}{$atomi}{$atomj} }, $distance;
+		}
+	}
+	close SC_CSTS or die $!;
+	print STDERR "done.\n";
+
+	# transform sc_csts into Rosetta-style constraints
+	my @cst_lines;
+	foreach my $resi ( keys %sc_csts ) {
+	foreach my $resj ( keys %{$sc_csts{$resi}} ) {
+		my $cst_count = 0;
+		foreach my $atomi ( keys %{$sc_csts{$resi}{$resj}} ) {
+		foreach my $atomj ( keys %{$sc_csts{$resi}{$resj}{$atomi}} ) {
+			$cst_count++;
+		}
+		}
+
+		foreach my $atomi ( keys %{$sc_csts{$resi}{$resj}} ) {
+		foreach my $atomj ( keys %{$sc_csts{$resi}{$resj}{$atomi}} ) {
+			my @dists     = @{$sc_csts{$resi}{$resj}{$atomi}{$atomj}};
+			my $weight    = sprintf ("%4.3f", 1/(scalar(@$template_pdbs)));
+			my $sc_weight = sprintf( "%4.3f", 1/$cst_count );
+
+			my @csts = map { { mean => $_, sdev => 1.0, weight => $weight } } @dists;
+			my @merged_csts = merge_redundant_csts(\@csts);
+
+			my $n_csts = scalar @merged_csts;
+			my $cst_line = "AtomPair $atomi $resi $atomj $resj SCALARWEIGHTEDFUNC $sc_weight SOGFUNC $n_csts";
+			foreach my $cst (@merged_csts) {
+				$cst_line = join ' ', ( $cst_line, $cst->{mean}, $cst->{sdev}, $cst->{weight} );
+			}
+			push @cst_lines, $cst_line;
+		}
+		}
+	}
+	}
+
+	if ( wantarray ) { return @cst_lines; }
+	return \@cst_lines;
+}
+
+sub format_id_simple {
+	my $id = shift;
+	if ( length $id != 5 ) {
+		die "Error: id too short ($id!)\n";
+	}
+
+	$id = lc( substr( $id, 0, 4 ) ) . uc( substr( $id, 4, 1 ) );
+	return $id;
+}
+
+sub calc_weights {
+	my $numbers = shift;
+
+	my $sum = 0;
+	foreach my $n (@$numbers) {
+		$sum += $n;
+	}
+
+	my @weights;
+	foreach my $n (@$numbers) {
+		push @weights, ($n / $sum);
+	}
+
+	return \@weights;
+}
+
+sub calc_sdev_weights {
+	my $predictions  = shift;
+	my $weight_param = shift;
+
+	my @sdevs = map { $_->{sdev} / (0.2*$_->{weight}) } @$predictions;
+	#my @sdevs = map { $_->{sdev} } @$predictions;
+	my @transformed = map { transform_sdev( $_, $weight_param ) } @sdevs;
+
+	#if ( scalar(@sdevs) > 1 ) {
+	#	print "sdevs are:\n", join ' ', @sdevs, "\n";
+	#	my @weights = @{ calc_weights( \@transformed ) };
+	#	print "transformed:\n", join ' ', @transformed, "\n";
+	#	print "weights are:\n", join ' ', @weights, "\n";
+	#	exit 1;
+	#}
+	return calc_weights( \@transformed );
+}
+
+sub transform_sdev {
+	my $sdev  = shift;
+	my $param = shift;
+
+	return $sdev ** ( -1 * $param );
+}
+
+sub assemble_path {
+	return join '/', @_;
+}
+
+{
+my %messages;
+sub already_printed {
+	my $msg = shift;
+	my $printed = ( exists $messages{$msg} );
+	$messages{$msg}++;
+	return $printed;
+}
+}

@@ -1,0 +1,116 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use lib '/work/tex/src/cm_scripts/perl_lib';
+
+use File::Basename;
+use File::Path;
+use Getopt::Long;
+use List::Util qw/ min /;
+use TMalign qw/ get_tmscore /;
+use Rosetta::align_util qw/ read_alns / ;
+use Rosetta::Sequence qw/ read_protein_fasta_fn /;
+
+my %options;
+$options{ssw}         = 0.15;
+$options{native}      = 0;
+$options{talos_fn}    = 0;
+$options{fasta}       = 0;
+$options{max_tmscore} = 0.4;
+$options{min_length}  = 0.9;
+$options{n_to_make}   = 3;
+
+&GetOptions(
+	\%options,
+	"native=s",
+	"fasta=s",
+	"talos_fn=s",
+	"ssw=f",
+	"n_to_make=i",
+);
+
+my @required = qw/ native talos_fn fasta /;
+foreach my $fn (@required) {
+	if ( ! -f $options{$fn} ) {
+		print "given: ", $options{$fn}, "\n";
+		die "Error: must provide -$fn!\n";
+	}
+}
+
+# step 1: run hhsearch with high ss-weight
+my $aln_fn = "bad_alns.result";
+if ( ! -f $aln_fn ) {
+	system( "~tex/src/cm_scripts/bin/run-hhsearch.pl -talos_fn $options{talos_fn} -n_procs 8 -ssw $options{ssw} -max_template_pct_id 0.15 $options{fasta} -outfile $aln_fn" );
+}
+
+# step 2: iterate over the alignments, get the relevant template pdbs
+my $seq_len = length( read_protein_fasta_fn($options{fasta}) );
+my @alns = @{ read_alns( $aln_fn, 'grishin' ) };
+my $template_dir = 'templates';
+mkpath $template_dir;
+
+my %tmscores;
+my %alns_by_name;
+
+@alns = sort { $b->ungapped_query_len <=> $a->ungapped_query_len } @alns;
+
+ALN: foreach my $aln (@alns) {
+	my $id = substr( $aln->template_name, 0, 5 );
+	my $pdbid = substr( $id, 0, 4 );
+	my $chain = substr( $id, 4, 1 );
+	#print $aln->template_name, " => ", "$pdbid$chain", "\n";
+	if ( ! -f "$template_dir/$pdbid$chain.pdb" ) {
+		my $cmd = "cd $template_dir; ~tex/src/cm_scripts/bin/get_pdb.py $pdbid $chain";
+		system($cmd);
+	}
+
+	# step 3: use the scores of the templates compared to native to pick the
+	# worst alignments
+	my $length   = sprintf( "%6.2f", $aln->ungapped_query_len / $seq_len );
+	if ( $length < $options{min_length} ) { next; }
+
+	my $template = "$template_dir/$pdbid$chain.pdb";
+	if ( ! -f $template ) { next; }
+	my $score    = get_tmscore($template,$options{native});
+
+	if ( $score <= $options{max_tmscore} ) {
+		print $aln->filt_string, "\n";
+		print join ' ', (
+			$aln->template_name,
+			$score,
+			$length
+		);
+		print "\n";
+		$tmscores{$aln->template_name} = $score;
+		$alns_by_name{$aln->template_name} = $aln;
+		print "currently have ", scalar keys %alns_by_name, " alignments.\n";
+	}
+
+	if ( scalar keys %alns_by_name >= $options{n_to_make} ) {
+		last ALN;
+	}
+}
+
+my @sorted = sort { $tmscores{$a} <=> $tmscores{$b} } keys %tmscores;
+$options{n_to_make} = min( scalar(@sorted), $options{n_to_make} );
+
+# make some bad restraints
+my $idx = 1;
+foreach my $id ( @sorted ) {
+	my $aln = $alns_by_name{$id};
+
+	my $fasta_basename = basename($options{fasta});
+	my $rsr_file = "$fasta_basename.$id.bad_csts";
+
+	open FILE, ">$id.aln" or die $!;
+	print FILE $aln->filt_string, "\n";
+	close FILE or die $!;
+
+	my $cmd = "~tex/src/cm_scripts/bin/predict_distances.pl $id.aln $options{fasta} -outfile $rsr_file -aln_format grishin -max_e_value 10000";
+	print $cmd, "\n";
+	system($cmd);
+	system( "ln -s $rsr_file bad.$idx.dist_csts" );
+	$idx++;
+}

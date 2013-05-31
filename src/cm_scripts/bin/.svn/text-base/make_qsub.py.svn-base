@@ -1,0 +1,61 @@
+#! /usr/bin/env python
+from string import Template
+template = Template('''
+#! /bin/bash
+#PBS -N $job_name
+#PBS -l trl=8:12
+#PBS -l walltime=$job_time
+#PBS -o $logging_dir
+#PBS -j oe
+#PBS -d $working_dir
+HYAK_SLOTS=`wc -l < $PBS_NODEFILE`
+cat $args_file | parallel -v -t -j $HYAK_SLOTS
+''')
+
+def validate(d):
+    '''Validates user-specified options, halting execution if an invalid entry is encountered'''
+    from os.path import exists
+    from re import match
+    from sys import exit
+
+    if not exists(d['working_dir']):
+        print 'Working directory does not exist'
+        exit()
+
+    if not exists(d['logging_dir']):
+        print 'Logging directory does not exist'
+        exit()
+
+    if not match('\d{1,2}:\d{2}:\d{2}', d['job_time']):
+        print 'Invalid format for option --job_time'
+        exit()
+
+if __name__ == '__main__':
+    '''
+    A simple program for generating hyak qsub files.
+
+    Options:
+    --job_name= Name of the job to be executed (Required)
+    --working_dir= Directory in which execution will occur (Required)
+    --logging_dir= Directory in which output (stdout, stderr) will be recorded (Required)
+    --args_file= PSB job scheduler args file (Required)
+    --job_time= Controls the maximum running time of the job. Format hh:mm:ss. (Optional)
+    '''
+
+    import getopt, sys
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], '', [
+            'job_name=', 'args_file=', 'working_dir=', 'logging_dir=', 'job_time='])
+    except getopt.GetoptError, err:
+        print str(err)
+        exit(2)
+
+    # Collect arguments in a dictionary
+    d = { 'job_name' : '', 'args_file' : '', 'working_dir' : '', 'logging_dir' : '', 'job_time' : '4:00:00' }
+    for opt, value in opts:
+        # convert long-form options to template keys
+        opt = opt.replace('--', '')
+        d[opt] = value
+
+    validate(d)
+    print template.safe_substitute(d)

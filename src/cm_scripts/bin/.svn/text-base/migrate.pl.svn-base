@@ -1,0 +1,149 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use File::Copy;
+use File::Path;
+use File::Basename;
+use Getopt::Long;
+
+my %options;
+$options{rb_id}         = 0;
+$options{boinc_dir}     = 0;
+$options{dest_base}     = 0;
+
+&GetOptions(
+	\%options,
+	"boinc_dir=s",
+	"dest_base=s",
+	"rb_id=s",
+);
+
+assert_dir_exists( $options{boinc_dir} );
+
+
+my @files = glob( "$options{boinc_dir}/*" );
+
+# try to recognize rb_id from boinc_dir
+if ( $options{rb_id} == 0 ) {
+	if ( $options{boinc_dir} =~ /(rb_\d+_\d+_\d+_\d+)/ ) {
+		$options{rb_id} = $1;
+		print "boinc_dir = ", $options{boinc_dir}, "\n";
+		print "rb_id = ", $options{rb_id}, "\n";
+	}
+}
+
+# make a directory
+my $dest_dir = "$options{dest_base}/$options{rb_id}";
+mkpath $dest_dir;
+
+# copy files into $dest_dir
+my $boinc_submit_data;
+my @new_input_files;
+foreach my $fn (@files) {
+	copy( $fn, $dest_dir );
+	if ( $fn =~ /\.job$/ ) {
+		$boinc_submit_data = read_boinc_submit($fn);
+		my $files = files_from_boinc_submit($fn);
+		foreach my $boinc_fn (@$files) {
+			copy( $boinc_fn, $dest_dir );
+			# change /net/boinc/ROSETTA to /f/boinc
+			my $new_boinc_fn = join '/', (
+				'/f/boinc/robetta',
+				$options{rb_id},
+				basename($boinc_fn)
+			);
+			push @new_input_files, $new_boinc_fn;
+		}
+	}
+}
+$boinc_submit_data->{inputfiles} = join ',', @new_input_files;
+
+write_boinc_submit( "$dest_dir/boinc_submit.txt", $boinc_submit_data );
+
+sub write_boinc_submit {
+	my $fn = shift;
+	my $data = shift;
+
+	my $queueline = "";
+	open OUT, ">$fn" or die $!;
+	foreach my $key ( sort keys %$data) {
+		if ($key =~ /^\s*queue\s*$/i) {
+			$queueline = join ' = ', ( $key, $data->{$key} );
+		} else {
+			print OUT join ' = ', ( $key, $data->{$key} );
+			print OUT "\n";
+		}
+	}
+	if ($queueline) {
+		print OUT "$queueline\n";
+	} else {
+		die "queue line was not found!\n";
+	}
+
+	close OUT or die $!;
+
+	print "wrote $fn.\n";
+}
+
+sub read_boinc_submit {
+	my $fn = shift;
+
+	my %data;
+
+	open FILE, "<$fn" or die $!;
+	while ( my $line = <FILE> ) {
+		chomp $line;
+		if ( $line =~ /(\S+)\s*=\s*(.*)$/ ) {
+			my $key = $1;
+			my $val = $2;
+			$data{$key} = $val;
+		}
+	}
+use Data::Dumper::Simple;
+print Dumper( %data );
+
+	return \%data;
+}
+
+sub assert_dir_exists {
+	my $dir = shift;
+
+	if ( !$dir && !-d $dir ) {
+		die "Error: dir $dir doesn't exist!\n";
+	}
+
+	return 1;
+}
+
+sub copy_with_replace {
+	my $orig_fn     = shift;
+	my $new_fn      = shift;
+	my $orig_str    = shift;
+	my $replace_str = shift;
+
+	open FILE, "<$orig_fn" or die $!;
+	open OUT, ">$new_fn" or die $!;
+	while ( my $line = <FILE> ) {
+		$line =~ s/$orig_str/$replace_str/g;
+		print OUT $line;
+	}
+	close OUT or die $!;
+	close FILE or die $!;
+}
+
+sub files_from_boinc_submit {
+	my $fn = shift;
+
+	my @input_files;
+	open FILE, "<$fn" or die $!;
+	while ( my $line = <FILE> ) {
+		chomp $line;
+		if ( $line =~ /^inputfiles\s*=\s*(.*)/ ) {
+			my $str = $1;
+			@input_files = split /,/, $str;
+		}
+	}
+	return \@input_files;
+}

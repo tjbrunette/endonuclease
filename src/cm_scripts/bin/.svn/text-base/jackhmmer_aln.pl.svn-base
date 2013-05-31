@@ -1,0 +1,37 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use Getopt::Long;
+
+my %options;
+$options{cpu}      = 4;
+$options{e_value}  = 1e-1;
+$options{prof_db}  = "/scratch/ROSETTA/genomes/nr";
+$options{pdb_db}   = "/work/tex/db/pdbaa";
+$options{n_rounds} = 5;
+&GetOptions(
+	\%options,
+	"n_rounds=i",
+	"pdb_db=s",
+	"prof_db=s",
+	"e_value=s",
+	"cpu=i",
+);
+
+foreach my $seq (@ARGV) {
+	my $prof = "$seq.chkali-1.sto";
+	if ( ! -f $prof ) {
+		my $cmd = "jackhmmer -N $options{n_rounds} --chkali $seq.chkali --chkhmm $seq.chkhmm --tblout $seq.tbl -E $options{e_value} --cpu $options{cpu} $seq $options{prof_db} > test";
+		#print $cmd, "\n";
+		system($cmd);
+	}
+	my @hmm_files = glob( "$seq.chkhmm-*.hmm" );
+	foreach my $hmm (@hmm_files) {
+		if ( ! -f "$hmm.result" ) {
+			my $search_cmd = "hmmsearch -E $options{e_value} $hmm $options{pdb_db} > $hmm.result";
+			system( $search_cmd );
+		}
+	}
+}

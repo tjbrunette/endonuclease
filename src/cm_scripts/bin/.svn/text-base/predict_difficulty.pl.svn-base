@@ -1,0 +1,388 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use lib '/work/tex/src/cm_scripts/perl_lib';
+use Getopt::Long;
+use File::Basename;
+use List::Util qw/ max /;
+use TMalign qw/ get_tmscore /;
+use Rosetta::align_util qw/ read_alns /;
+use Rosetta::Sequence qw/ read_protein_fasta_fn /;
+use Data::Dumper::Simple;
+
+my %options;
+$options{fasta_fn} = "alignment/t000_.fasta";
+$options{aln_fn}   = "alignment/t000.combined_top9.filt";
+
+&GetOptions(
+	\%options,
+	"fasta_fn=s",
+	"aln_fn=s",
+);
+
+my $dir   = dirname($options{aln_fn});
+my %probs = get_aln_features($dir);
+my @alns  = read_alns($options{aln_fn},'grishin');
+
+#print join ' ', qw/ aln_id lr_prob p_correct top3_div /;
+#print "\n";
+my $lr_max  = 0;
+my $pmf_sum = 0;
+my $lr_sum  = 0;
+my $div3 = compute_avg_divergence($options{fasta_fn},$options{aln_fn});
+foreach my $aln (@alns) {
+	my $id = $aln->get_template_name;
+	my $t_id = substr($id,0,5);
+	my $lr_prob = 0;
+	if ( $id =~ /_1/ || $id =~ /_4/ ) {
+		$lr_prob = $probs{raptor}{$t_id};
+	} elsif ( $id =~ /_3/ ) {
+		$lr_prob = $probs{sparks}{$t_id};
+	} elsif ( $id =~ /_2/ ) {
+		$lr_prob = $probs{hhsearch}{$t_id};
+	} else {
+		die "Error: don't recognize id $id!\n";
+	}
+
+	if ( !defined $lr_prob ) {
+		$lr_prob = 0.1;
+	}
+
+	my $p_correct = p_correct($id);
+	$pmf_sum += $p_correct;
+	$lr_sum  += $lr_prob;
+	$lr_max   = max($lr_max,$lr_prob);
+	#print join ' ', ( $id, $lr_prob, $p_correct, $div3 );
+	#print "\n";
+}
+
+#Coefficients:
+#(Intercept)       lr_max       lr_sum      pmf_sum   frank_stat  
+#    0.09278      0.05479      0.01155      0.37742      0.23167  
+# new coefficients
+#(Intercept)    d$lr_max    d$lr_sum   d$pmf_sum      d$div3 
+# 0.18127326  0.05163133  0.01428029  0.10012932  0.42705430 
+
+#my $difficulty = 0.0923 + 0.05479 * $lr_max + 0.01155 * $lr_sum + 0.37742 * $pmf_sum + 0.23167 * $div3;
+my $difficulty = 0.18127326 + 0.05163133 * $lr_max + 0.01428029 * $lr_sum + 0.10012932 * $pmf_sum + 0.42705430 * $div3;
+
+#print join ' ', qw/ lr_max lr_sum pmf_sum div3 /;
+#print "\n";
+#print join ' ', ( $lr_max, $lr_sum, $pmf_sum, $div3 );
+#print "\n";
+print "difficulty = $difficulty\n";
+
+sub compute_avg_divergence {
+	my $fasta  = shift;
+	my $aln_fn = shift;
+
+	# get pdbs for each alignment
+	my @pdbs;
+	my @alns = grep { $_->get_template_name =~ /01$/ } read_alns($aln_fn,'grishin');
+
+	foreach my $aln (@alns) {
+		my $id = $aln->get_template_name;
+		my $t_id = substr($id,0,5);
+		my $pdb = "$t_id.pdb";
+		if ( ! -f $pdb ) {
+			get_pdb($t_id);
+		}
+		if ( ! -f $pdb ) {
+			die "Error getting pdb $t_id.pdb!\n";
+		}
+		push @pdbs, $pdb;
+	}
+
+	my @pts = map { "$_.pdb" } map { $_->get_template_name } @alns;
+	if ( grep { !-f $_ } @pts ) {
+		my $pdb_str = join ' ', (@pdbs);
+		my $cmd = join ' ', (
+			get_rosetta_binary("partial_thread"),
+			"-in:file:alignment $aln_fn",
+			"-in:file:template_pdb $pdb_str",
+			"-in:file:fasta $fasta",
+			"-database ", get_rosetta_database(),
+		);
+		system("$cmd > pt.log");
+	}
+
+	@pts = grep { -f $_ } @pts;
+	if ( scalar(@pts) < 2 ) {
+		die "Error: not enough partial threading models!\n";
+	}
+
+	my @tmscores;
+	foreach my $idx1 ( 0 .. scalar(@pts)-1 ) {
+	foreach my $idx2 ( $idx1+1 .. scalar(@pts)-1 ) {
+		my $tmscore = get_tmscore($pts[$idx1],$pts[$idx2]);
+		push @tmscores, $tmscore;
+	}
+	}
+
+	return mean(@tmscores);
+}
+
+sub get_rosetta_binary {
+	my $bin = shift;
+
+	my @paths = qw{
+		/work/tex/src/rosetta/rosetta_source/bin
+	};
+	my $platform = 'linux';
+	my $build    = 'default';
+	my $compiler = 'gcc';
+	my $mode     = 'release';
+
+	foreach my $path (@paths) {
+		my $attempt = "$path/$bin.$build.$platform$compiler$mode";
+		if ( -f $attempt ) {
+			return $attempt;
+		}
+	}
+	die "Error: can't find a suitable Rosetta program named $bin!\n";
+}
+
+sub get_rosetta_database {
+	my @paths = qw{
+		/work/tex/src/rosetta/rosetta_database
+	};
+}
+
+sub get_aln_features {
+	my $dir = shift;
+	my %raptor_data   = read_features_raptor($dir);
+	my %sparks_data   = read_features_sparks($dir);
+	my %hhsearch_data = read_features_hhsearch($dir);
+
+	%raptor_data   = map { $_ => p_raptor($raptor_data{$_}) } keys %raptor_data;
+	%sparks_data   = map { $_ => p_sparks($sparks_data{$_}) } keys %sparks_data;
+	%hhsearch_data = map { $_ => p_hhsearch($hhsearch_data{$_}) } keys %hhsearch_data;
+
+	sub combine {
+		my $data   = shift;
+		my $dest   = shift;
+		my $prefix = shift;
+
+		foreach my $key ( keys %$data ) {
+			$dest->{$prefix}{$key} = $data->{$key};
+		}
+	}
+
+	my %combined_data;
+	combine( \%raptor_data, \%combined_data, 'raptor' );
+	combine( \%sparks_data, \%combined_data, 'sparks' );
+	combine( \%hhsearch_data, \%combined_data, 'hhsearch' );
+
+	if ( wantarray ) { return %combined_data };
+	return \%combined_data;
+}
+
+sub logit {
+	my $int = shift; # intercept
+	my $c   = shift; # constant used for scaling value
+	my $val = shift;
+
+	return 1 / ( 1 + exp( -1 * ($int + $c*$val) ) );
+}
+
+sub score_to_prob {
+	my $score = shift;
+	my $tag   = shift;
+	if ( $tag eq 'hhsearch' ) {
+		return p_hhsearch($score);
+	} elsif ( $tag eq 'raptor' ) {
+		return p_raptor($score);
+	} elsif ( $tag eq 'sparks' ) {
+		return p_sparks($score);
+	}
+	die "Error: don't recognize tag $tag!\n";
+}
+
+sub p_hhsearch {
+	my $hhsearch_score = shift;
+	return logit( -1.31, -0.01549, $hhsearch_score );
+}
+
+sub p_sparks {
+	my $sparks_score = shift;
+	return logit( -2.02810038, 0.09505219, $sparks_score );
+}
+
+sub p_raptor {
+	my $raptor_score = shift;
+	return logit( -5.66637250, 0.07450413, $raptor_score );
+}
+
+sub read_features_raptor {
+	my $dir = shift;
+	my $raptor_fn = (glob( "$dir/*.raptor_aln" ))[0];
+
+	if ( !-f $raptor_fn ) {
+		die "Error: no raptor filename in $dir!\n";
+	}
+
+	my %raptor_data;
+	open FILE, "<$raptor_fn" or die $!;
+	while ( my $line = <FILE> ) {
+		if ( $line =~ /No.\s*(\d+)\s+TemplateName = ([\d\w]+)\s+predicted GDT score = (\d+)/ ) {
+			my $rank           = $1;
+			my $partial_thread = $2;
+			my $pred_gdt       = $3;
+			$raptor_data{$partial_thread} = $pred_gdt;
+		} elsif ( $line =~ /TemplateName/ ) {
+			die "Error: didn't match line!:\n$line\n";
+		}
+	}
+	close FILE or die $!;
+
+	if ( wantarray ) { return %raptor_data; }
+	return \%raptor_data;
+}
+
+sub read_features_sparks {
+	my $dir = shift;
+
+	my $sparks_fn = (glob( "$dir/*.zs12" ))[0];
+
+	if ( !-f $sparks_fn ) {
+		die "Error: no sparks filename in $dir!\n";
+	}
+
+	my %sparks_data;
+	open FILE, "<$sparks_fn" or die $!;
+	my $rank = 1;
+	while ( my $line = <FILE> ) {
+		#t000_.fasta 2qcxB 17.62 -1255.8 231 1 0 0 225 53
+		chomp $line;
+		my ($query_id,$partial_thread,$score)  = split /\s+/, $line;
+		$sparks_data{$partial_thread} = $score;
+		$rank++;
+	}
+
+	close FILE or die $!;
+
+	if ( wantarray ) { return %sparks_data; }
+	return \%sparks_data;
+}
+
+sub read_features_hhsearch {
+	my $dir = shift;
+
+	my $hhr_fn = (glob( "$dir/*.hhr" ))[0];
+
+	if ( !-f $hhr_fn ) {
+		die "Error: no sparks filename in $dir!\n";
+	}
+
+	use constant min_evalue => 1e-45;
+	use constant max_evalue => 1;
+	open FILE, "<$hhr_fn" or die $!;
+
+	my %hhsearch_data;
+	my $current_id = 0;
+	while ( my $line = <FILE> ) {
+		chomp $line;
+		if ( $line =~ /^>(\S+)/ ) {
+			$current_id = $1;
+			$current_id =~ s/_//g;
+		} elsif ( $line =~ /Probab=([\d\.]+)/ ) {
+			$line =~ s/%//g;
+			while ( $line =~ /(\S+)=(\S+)/g ) {
+				my $key = $1;
+				my $val = $2;
+				if ( $key eq 'E-value' ) {
+					use List::Util qw/ min max /;
+					$val = max( min_evalue, $val );
+					$val = min( max_evalue, $val );
+					$hhsearch_data{$current_id} = log($val);
+				}
+			}
+		}
+	}
+	close FILE or die $!;
+
+	if ( wantarray ) { return %hhsearch_data; }
+	return \%hhsearch_data;
+}
+
+sub p_correct {
+	my $id = shift;
+	my %template_probs =  (
+		201 => 0.1276504, 202 => 0.0535388, 203 => 0.0243316, 204 => 0.0128212,
+		205 => 0.0082849, 206 => 0.0064972, 207 => 0.0057927, 208 => 0.0055150,
+		209 => 0.0054056, 210 => 0.0053625, 301 => 0.1161114, 302 => 0.0838580,
+		303 => 0.0609236, 304 => 0.0446156, 305 => 0.0330195, 306 => 0.0247739,
+		307 => 0.0189107, 308 => 0.0147415, 309 => 0.0117769, 310 => 0.0096689,
+		401 => 0.1430503, 402 => 0.0770168, 403 => 0.0427618, 404 => 0.0249920,
+		405 => 0.0157738, 406 => 0.0109919, 407 => 0.0085113, 408 => 0.0072245,
+		409 => 0.0065569, 410 => 0.0062107,
+	);
+
+	foreach my $key ( keys %template_probs ) {
+		if ( $id =~ /$key/ ) {
+			return $template_probs{$key};
+		}
+	}
+	return 0.005;
+}
+
+sub get_pdb {
+	my $id = shift;
+	my $pdbid = lc substr($id,0,4);
+	my $chain = uc substr($id,4,1);
+	my $output = `get_pdb.py $pdbid $chain`;
+}
+
+sub mean {
+	my $tot = 0;
+	foreach my $n (@_) {
+		$tot += $n;
+	}
+	return $tot / scalar(@_);
+}
+
+
+__END__
+my %data;
+$data{hhsearch} = -103;
+$data{raptor}   = 78;
+$data{sparks}   = 12.74;
+# function for calculating the probability that an alignment is "good" given
+# the alignment score.
+sub calc_lr {
+	my $data = shift;
+
+	my %output;
+	foreach my $key ( keys %data ) {
+		my $val = $data{$key};
+		my $outval;
+		if ( $key eq 'hhsearch' ) {
+			$outval = p_hhsearch($val);
+		} elsif ( $key eq 'sparks' ) {
+			$outval = p_sparks($val);
+		} elsif ( $key eq 'raptor' ) {
+			$outval = p_raptor($val);
+		} else {
+			die "Error: don't recognize score $key!\n";
+		}
+
+		$output{$key} = $outval;
+	}
+
+	if ( wantarray ) { return %output; }
+	return \%output;
+}
+
+my $ret = calc_lr( \%data );
+foreach my $key ( keys %data ) {
+	if ( !exists $ret->{$key} ) {
+		die "Error: no return value for key $key!\n";
+	}
+
+	my $val  = $data{$key};
+	my $prob = $ret->{$key};
+	print join ' ', ( $key, $val, $prob );
+	print "\n";
+}

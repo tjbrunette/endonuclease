@@ -1,0 +1,106 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use lib "/work/tex/src/cm_scripts/perl_lib";
+use File::Find;
+use File::Copy;
+use File::Basename;
+use Getopt::Long;
+use Rosetta::Job;
+use Rosetta::Util qw/ assemble_path /;
+
+my %options;
+$options{run_dir} = 0;
+$options{working_dir}      = 0;
+$options{combined_outfile} = "combined.out";
+$options{template_pdb}     = "/work/tex/MetEnzID_BlindSet/DA4204/template/template.pdb";
+&GetOptions(
+	\%options,
+	"run_dir=s",
+	"working_dir=s",
+	"combined_outfile=s",
+	"template_pdb=s",
+);
+
+if ( !-d $options{run_dir} ) {
+	die "Error: directory $options{run_dir} doesn't exist!\n";
+}
+if ( !$options{working_dir}) {
+	$options{working_dir} = $options{run_dir};
+}
+
+my @outfiles = find_files_by_regex( $options{run_dir}, '\.out$' );
+
+my $combine_job = Rosetta::Job->new(
+	executable   => "/work/tex/src/cm_scripts/bin/combine_silent.pl",
+	results_file => "$options{combined_outfile}",
+	args         => [
+		@outfiles,
+		"-outfile $options{combined_outfile}",
+	],
+	lockfile     => "combine.lock",
+	dir          => $options{working_dir}
+);
+if ( $combine_job->can_run ) {
+	$combine_job->run_with_message( "combining results in $options{run_dir}" );
+}
+
+my $cluster_job = Rosetta::Job->new(
+	executable   => "/work/tex/src/cm_scripts/bin/cluster_and_pick.pl",
+	results_file => "cluster/selected_models/c.0.0.pdb",
+	args         => [
+		"-skip_rescore",
+		"-outfile $options{combined_outfile}",
+		"-working_dir cluster",
+	],
+	lockfile     => "cluster_models.lock",
+	dir          => $options{working_dir},
+);
+if ( $cluster_job->can_run ) {
+	$cluster_job->run_with_message( "clustering models in $options{run_dir}" );
+}
+
+my $pdb = basename($cluster_job->results_file);
+my $add_ligand_job = Rosetta::Job->new(
+	executable   => "/work/tex/src/enzyme_id/make_posfile.pl",
+	results_file => "c.0.0.pdb.super.with_header.pdb",
+	args         => [
+		"-target_pdb $pdb",
+		"-template_pdb $options{template_pdb}",
+	],
+	lockfile     => "$pdb.add_ligand.lock",
+	dir          => assemble_path($options{working_dir},"cluster","selected_models"),
+);
+if ( $add_ligand_job->can_run ) {
+	$add_ligand_job->run_with_message( "adding ligand to $pdb" );
+}
+
+copy(
+	assemble_path(
+		$options{working_dir},
+		"cluster","selected_models","c.0.0.pdb.super.with_header.pdb"
+	),
+	$options{working_dir},
+);
+
+sub find_files_by_regex {
+   my $path  = shift;
+   my $regex = shift;
+
+	use Cwd qw/ abs_path /;
+
+   my @files;
+   my $wanted = sub {
+      if ( $_ =~ /$regex/ ) {
+         push @files, abs_path($_);
+      }
+   };
+   find( $wanted, $path );
+
+   if ( wantarray ) {
+      return @files;
+   }
+   return \@files;
+}

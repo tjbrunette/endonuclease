@@ -1,0 +1,205 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use alignment;
+use Getopt::Long;
+
+my $usage = <<USAGE;
+usage: $0 <fasta_fn> <aln_file> <cst_file> -outfile <outfile> -pdb_dir <path_to_pdbs>
+USAGE
+
+my $output_file = "scores";
+my $pdb_dir = ".";
+&GetOptions(
+	"outfile=s" => \$output_file,
+	"pdb_dir=s" => \$pdb_dir,
+);
+
+my $executable = "/work/tex/src/mini_clean/mini/bin/distances.linuxgccrelease";
+
+my $fasta_fn = $ARGV[0];
+my $seq = read_fasta( $fasta_fn );
+
+my $aln_file = $ARGV[1];
+my @alns = @{ alignment::parse_alignments($aln_file) };
+
+my $cst_file = $ARGV[2];
+my $csts     = read_csts( $cst_file );
+my $get_dist = &make_dist_func($pdb_dir);
+
+if ( -f $output_file ) {
+	die "Not overwriting $output_file!\n";
+}
+
+open OUT, ">$output_file" or die $!;
+print OUT join ' ', ( qw/ aln_id score / );
+print OUT "\n";
+foreach my $aln (@alns) {
+	my $aln_id = $aln->get_template_name;
+	my $template_id = substr( $aln_id, 0, 5 );
+
+	print STDERR $aln->filt_string, "\n";
+
+	my $map   = $aln->map_query_template;
+	my $score = 0;
+	foreach my $resi ( 1 .. length($seq) ) {
+	foreach my $resj ( $resi + 10 .. length($seq) ) {
+		my $t_resi = '-';
+		my $t_resj = '-';
+		if ( exists $map->{$resi} ) {
+			$t_resi = $map->{$resi};
+		}
+		if ( exists $map->{$resj} ) {
+			$t_resj = $map->{$resj};
+		}
+
+		my $dist = 18.3;
+
+		if ( $t_resi ne '-' && $t_resj ne '-' ) {
+			$dist = $get_dist->( $template_id, $resi, $resj );
+		}
+
+		if ( !exists $csts->{$resi}{$resj} ) {
+			my $mean = 18.3;
+			my $sdev = 7.3;
+			$score += log( dgaussian( $mean, $sdev, $dist ) );
+		} else {
+			foreach my $cst ( @{ $csts->{$resi}{$resj} } ) {
+				if ( $cst->{weight} - 1e20 > 0 ) {
+					$score += log(
+						$cst->{weight} *
+						dgaussian( $cst->{mean}, $cst->{sdev}, $dist )
+					);
+				}
+		 	}
+		}
+	}
+	}
+
+	print OUT join ' ', ( $aln_id, $score );
+	print OUT "\n";
+}
+close OUT or die $!;
+
+sub dgaussian {
+	my $mean  = shift;
+	my $sdev  = shift;
+	my $value = shift;
+
+	use List::Util qw/ max /;
+	use constant TINY_FLOAT => 1e-200;
+	my $r = abs( $mean - $value );
+	use constant sqrt_2pi => 2.50662721600161;
+
+	my $val = 1 / (sqrt_2pi * $sdev) * exp( -1 * $r * $r / ( 2 * $sdev * $sdev ) );
+	return max( $val, TINY_FLOAT );
+}
+
+sub make_dist_func {
+	my $pdb_dir = shift;
+	my %distance_map; # distance_map{$template_name}{$resi}{$resj} = $dist;
+	return sub {
+		my $id   = shift;
+		my $resi = shift;
+		my $resj = shift;
+
+		if ( !exists $distance_map{$id} ) {
+			$distance_map{$id} = read_distance_data($id,$pdb_dir);
+		}
+
+		if ( exists $distance_map{$id}{$resi}{$resj} ) {
+			return $distance_map{$id}{$resi}{$resj};
+		}
+
+		if ( scalar keys %distance_map > 20 ) {
+			%distance_map = ();
+		}
+		return 18.3;
+	}
+}
+
+sub read_distance_data {
+	my $id = shift;
+	my $pdb_dir = shift;
+	my $pdb_fn = join '/', ( $pdb_dir, "$id.pdb" );
+
+	if ( ! -f $pdb_fn ) {
+		die "Error: can't find $pdb_fn\n";
+	}
+
+	print STDERR "reading data from $pdb_fn ... ";
+	my $output = `$executable -in:file:s $pdb_fn -mute all`;
+	my @lines  = split /\n/, $output;
+
+	my %data;
+	my $header = shift @lines;
+	foreach my $line (@lines) {
+		$line = trim_whitespace( $line );
+		my @d = split /\s+/, $line;
+		my $resi = $d[0];
+		my $resj = $d[1];
+		my $dist = $d[8];
+		$data{$resi}{$resj} = $dist;
+	}
+
+	print STDERR "done.\n";
+
+	return \%data;
+}
+
+sub trim_whitespace {
+	my $line = shift;
+	my $copy = $line;
+
+	chomp $copy;
+	$copy =~ s/^\s+//g;
+	$copy =~ s/\s+$//g;
+
+	return $copy;
+}
+
+sub read_csts {
+	my $fn = shift;
+
+	my %cst_data;
+	open FILE, "<$fn" or die $!;
+	while ( my $line = <FILE> ) {
+		if ( $line =~ /^AtomPair/ ) {
+			chomp $line;
+			my (
+				$tag, $atom_i, $resi, $atom_j, $resj,
+				$func_name, $n_funcs, @rest
+			) = split /\s+/, $line;
+
+			while ( @rest ) {
+				my $mean   = shift @rest;
+				my $sdev   = shift @rest;
+				my $weight = shift @rest;
+
+				push @{ $cst_data{$resi}{$resj} }, {
+					mean => $mean, sdev => $sdev, weight => $weight
+				};
+			}
+		}
+	}
+
+	return \%cst_data;
+}
+
+sub read_fasta {
+	my $fasta_fn = shift;
+
+	open FILE, "<$fasta_fn" or die $!;
+	my $seq = '';
+	while ( my $line = <FILE> ) {
+		if ( $line !~ /^>/ ) {
+			chomp $line;
+			$line =~ s/\s+//g;
+			$seq .= $line;
+		}
+	}
+	return $seq;
+	close FILE or die $!;
+}

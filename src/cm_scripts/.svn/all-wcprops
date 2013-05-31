@@ -1,0 +1,35 @@
+K 25
+svn:wc:ra_dav:version-url
+V 39
+/source/!svn/ver/48747/trunk/cm_scripts
+END
+setup_star.pl
+K 25
+svn:wc:ra_dav:version-url
+V 53
+/source/!svn/ver/47108/trunk/cm_scripts/setup_star.pl
+END
+setup_cm.pl
+K 25
+svn:wc:ra_dav:version-url
+V 51
+/source/!svn/ver/47867/trunk/cm_scripts/setup_cm.pl
+END
+setup_ab.pl
+K 25
+svn:wc:ra_dav:version-url
+V 51
+/source/!svn/ver/48724/trunk/cm_scripts/setup_ab.pl
+END
+README
+K 25
+svn:wc:ra_dav:version-url
+V 46
+/source/!svn/ver/34736/trunk/cm_scripts/README
+END
+rosetta_cm.conf.example
+K 25
+svn:wc:ra_dav:version-url
+V 63
+/source/!svn/ver/45688/trunk/cm_scripts/rosetta_cm.conf.example
+END

@@ -1,0 +1,106 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use lib '/work/tex/src/cm_scripts/perl_lib';
+
+use List::Util qw/ shuffle min /;
+use TMalign qw/ get_tmscore /;
+use Getopt::Long;
+use Rosetta::Job;
+use Rosetta::Util;
+use Rosetta::align_util;
+
+my %options;
+$options{fasta_fn}    = 0;
+$options{aln_format}  = 'hhsearch';
+$options{aln_outfile} = 0;
+$options{outfile}     = 0;
+$options{native}      = 0;
+$options{script_dir}  = '/work/tex/src/cm_scripts/bin';
+$options{max_tmscore} = 0.2;
+
+&GetOptions(
+	\%options,
+	'outfile=s',
+	'aln_format=s',
+	'aln_outfile=s',
+	'fasta_fn=s',
+	'native=s',
+);
+
+if ( !$options{outfile} ) {
+	die "Error: must provide -outfile!\n";
+}
+if ( !file_exists($options{fasta_fn}) ) {
+	die "Error: must provide -fasta_fn!\n";
+}
+if ( !file_exists($options{native}) ) {
+	die "Error: must provide -native!\n";
+}
+
+if ( !$options{aln_outfile} ) {
+	$options{aln_outfile} = "$options{outfile}.alns";
+}
+
+my @aln_files = @ARGV;
+my %named_alns;
+my @filtered_alns;
+foreach my $fn (@aln_files) {
+	my $alns = Rosetta::align_util::read_alns($fn,$options{aln_format},"");
+
+	# get the worst 10 alignments from each file
+	push @filtered_alns, @$alns[ -10, -1 ];
+
+	#foreach my $aln (@$alns) {
+	#	my $name = substr( $aln->get_template_name, 0, 5 );
+	#	if ( $aln->get_e_value > 0.01 ) {
+	#		push @{ $named_alns{$name} }, $aln;
+	#	}
+	#}
+}
+
+#foreach my $name ( keys %named_alns ) {
+#	my $pdbid = substr($name,0,4);
+#	my $chain = substr($name,4,1);
+#
+#	my $pdb = "$name.pdb";
+#	if ( ! -f $pdb ) {
+#		#system( "$options{script_dir}/get_pdb.py $pdbid $chain" );
+#		my $output = `$options{script_dir}/get_pdb.py $pdbid $chain`;
+#	}
+#	if ( -f $pdb ) {
+#		my $score = get_tmscore($pdb,$options{native});
+#		if ( $score < $options{max_tmscore} ) {
+#			print "poor alignments to $name with tmscore=$score\n";
+#			push @filtered_alns, @{ $named_alns{$name} };
+#		} else {
+#			print "score $score too high for $name!\n";
+#		}
+#		unlink $pdb;
+#	}
+#	print "have ", scalar(@filtered_alns), " alignments.\n";
+#}
+
+
+open FILE, ">$options{aln_outfile}" or die $!;
+foreach my $aln (@filtered_alns) {
+	print FILE $aln->filt_string, "\n";
+}
+close FILE or die $!;
+
+my $constraints_job = Rosetta::Job->new(
+	executable => assemble_path( $options{script_dir}, 'predict_distances.pl' ),
+	args => [
+		$options{aln_outfile}, $options{fasta_fn},
+		"--outfile", $options{outfile},
+		"--aln_format grishin",
+		"--max_templates", $options{max_templates},
+		"--max_e_value", 9999999,
+	],
+	dir => '.',
+	lockfile => "$options{outfile}.make_csts.lock",
+	results_file => $options{outfile},
+);
+$constraints_job->run_with_message( "generating restraints" );

@@ -1,0 +1,221 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use FindBin;
+use lib "$FindBin::Bin/../perl_lib";
+
+use Cwd qw/ abs_path /;
+use List::Util qw/ min /;
+use File::Copy;
+use File::Path;
+use File::Basename;
+use Getopt::Long;
+use Rosetta::Util;
+use Rosetta::Instance;
+
+my $options = {};
+$options->{n_lowE}       = 1000;
+$options->{compiler}     = 'gcc';
+$options->{outfile}      = 0;
+$options->{format}       = 'binary'; # silent-file format
+$options->{n_models}     = 5;
+$options->{working_dir}  = 0;
+$options->{overwrite}    = 0;
+$options->{skip_rescore} = 0;
+$options->{mini_prefix}  = '/work/tex/src/mini/bin';
+$options->{gdtmm}        = 0;
+$options->{fullatom}     = 1;
+$options->{mpi}          = 0;
+$options->{native}       = 0;
+
+&GetOptions(
+	$options,
+	'native=s',
+	'working_dir=s',
+	'outfile=s',
+	'n_models=i',
+	'n_lowE=i',
+	'format=s',
+	'mini_prefix=s',
+	'overwrite!', # implement this better ...
+	'skip_rescore!',
+	'gdtmm!',
+	'fullatom!',
+	'mpi!',
+);
+
+my $instance = Rosetta::Instance->new(
+	mode => 'release',
+	compiler => $options->{compiler},
+	mini_prefix => $options->{mini_prefix},
+);
+
+$0 = basename $0;
+my $usage = <<USAGE;
+	usage: $0 [options]
+options:
+	--outfile                           (silent-file containing decoys)
+	--working_dir <directory_to_create> (new directory in which work is done, required)
+	--format <silent_file_format>       (format of silent-file, defaults to binary)
+	--n_models <int>                    (number of models to pick using clustering)
+	--n_lowE_models <int>               (number of low-energy models to use in clustering)
+USAGE
+
+if ( ! $options->{working_dir} ) {
+	die "Error: must provide -working_dir!\n";
+}
+if ( -d $options->{working_dir} && ! $options->{overwrite} ) {
+	die "Not overwriting directory $options->{working_dir} without -overwrite!\n";
+}
+if ( ! $options->{outfile} || ! -f $options->{outfile} ) {
+	die "Error: outfile doesn't exist!\n(given $options->{outfile})\n";
+}
+
+$options->{working_dir} = abs_path( $options->{working_dir} );
+mkpath( $options->{working_dir} );
+my $lockfile = assemble_path( $options->{working_dir}, 'run.lock' );
+if ( -f $lockfile ) {
+	die "Error: lockfile exists in $options->{working_dir}!\n";
+}
+
+system( "touch $lockfile" );
+
+my $rescored_outfile = join '.', ( 'cluster_rescored', 'out' );
+my $selected_outfile = join '.', ( 'selected', 'out' );
+my $input_file = join '.', ( 'from_boinc', $rescored_outfile );
+if ( $options->{skip_rescore} ) {
+	copy( $options->{outfile}, "$options->{working_dir}/$input_file" );
+	$rescored_outfile = $input_file;
+} else {
+	# remove garbage lines from BOINC
+	if ( ! -f "$options->{working_dir}/$input_file" ) {
+		my $cmd = "grep -v \\# $options->{outfile} > $options->{working_dir}/$input_file";
+		if ( $options->{outfile} =~ /\.bz2$/ ) {
+			$cmd = "bzcat $options->{outfile} | grep -v \\# > $options->{working_dir}/$input_file";
+		}
+		print $cmd, "\n";
+		system($cmd);
+	}
+
+	# rescore
+	my $rescore_job = $instance->generate_job( 'score_jd2' );
+	$rescore_job->add_args( '-in:file:silent_struct_type', $options->{format} );
+	$rescore_job->add_args(
+	   "-out:file:silent $rescored_outfile",
+	   '-in:file:rescore true',
+		'-silent_score_prefix boinc_',
+		"-in:file:silent $input_file",
+		'-silent_read_through_errors',
+	);
+	if ( $options->{fullatom} ) {
+		$rescore_job->add_args('-in:file:fullatom', '-score:weights score12_full');
+	} else {
+		$rescore_job->add_args('-in:file:fullatom false', '-score:weights score3');
+	}
+	if ( $options->{native} ) {
+		$rescore_job->add_args( "-evaluation:align_rmsd_target $options->{native} -align_rmsd_column native" );
+	}
+	$rescore_job->dir( $options->{working_dir} );
+	$rescore_job->results_file( $rescored_outfile );
+	$rescore_job->lockfile( 'rescore.lock' );
+	if ( $options->{mpi} ) {
+		$rescore_job->mpi(1);
+	}
+
+	if ( $rescore_job->can_run ) {
+		$rescore_job->run_with_message( "rescoring in $options->{working_dir}" );
+	}
+}
+
+# pick the lowest energy N models from the rescored outfile
+print "rescored_outfile = $rescored_outfile\n";
+my $tags = pick_lowE_tags( assemble_path($options->{working_dir},$rescored_outfile), $options->{n_lowE} );
+my $select_job = $instance->generate_job( 'combine_silent' );
+print "trying to select ", scalar(@$tags), " tags.\n";
+$select_job->add_args( "-in:file:silent $rescored_outfile" );
+$select_job->add_args( "-in:file:silent_struct_type $options->{format}" );
+$select_job->add_args( '-in:file:tags ', @$tags );
+$select_job->add_args( '-out:file:silent_struct_type', $options->{format} );
+$select_job->add_args( '-out:file:silent', $selected_outfile );
+$select_job->add_args( '-silent_read_through_errors' ); # probably not necessary
+if ( $options->{fullatom} ) {
+	$select_job->add_args( '-in:file:residue_type_set fa_standard' );
+} else {
+	$select_job->add_args( '-in:file:residue_type_set centroid' );
+}
+
+$select_job->dir( $options->{working_dir} );
+$select_job->lockfile( 'select.lock' );
+$select_job->results_file( $selected_outfile );
+if ( $select_job->can_run ) {
+	$select_job->run_with_message( "selecting models into $selected_outfile" );
+}
+print "finished adding ", scalar(@$tags), " models into ",
+	$selected_outfile, ".\n";
+
+# cluster
+my $cluster_job = $instance->generate_job( 'cluster' );
+$cluster_job->add_args( "-in:file:silent $selected_outfile" );
+$cluster_job->add_args( '-in:file:silent_struct_type', $options->{format}  );
+if ( $options->{fullatom} ) {
+	$cluster_job->add_args( '-in:file:fullatom true' );
+} else {
+	$cluster_job->add_args( '-in:file:fullatom false' );
+}
+#$cluster_job->add_args( '-cluster:radius -1' );
+$cluster_job->lockfile( $options->{n_lowE} . '.lock' );
+$cluster_job->results_file( 'c.0.0.pdb' );
+$cluster_job->dir( $options->{working_dir} );
+if ( $options->{gdtmm} ) {
+	$cluster_job->add_args( '-cluster:gdtmm' );
+}
+
+if ( $cluster_job->can_run ) {
+	print join ' ', ( $cluster_job->executable, $cluster_job->args_as_str );
+	print "\n";
+	$cluster_job->run_with_message( "clustering in $options->{working_dir}" );
+}
+
+# take the output of clustering and select N models
+my $select_dir = assemble_path( $options->{working_dir}, 'selected_models' );
+for my $n ( 0 .. $options->{n_models} - 1 ) {
+	mkpath $select_dir;
+	copy( assemble_path($options->{working_dir},"c.$n.0.pdb"), $select_dir );
+}
+
+unlink $lockfile;
+
+sub pick_lowE_tags {
+	my $fn = shift;
+	my $N  = shift;
+
+	my @data;
+	open FILE, "<$fn" or die "Error opening file $fn ($!)";
+	<FILE>; # header
+	while ( my $line = <FILE> ) {
+		if ( $line =~ /^SCORE:\s+([\-\d\.]+).*\s+([\d\w_]+)$/ ) {
+			push @data, [ $1, $2 ];
+		} elsif ( $line =~ /^SCORE/ ) {
+			#print "Rejected line:\n$line!\n";
+		}
+	}
+
+	$N = min( scalar(@data), $N );
+
+	if ( !$N || $N < 1 || $N > scalar(@data) ) {
+		print "Error with N provided ($N)!\n";
+		print "only have ", scalar(@data), " tags.\n";
+		exit 1;
+	}
+
+	my @sorted_tags =
+		map  { $_->[1] }
+		sort { $a->[0] <=> $b->[0] }
+		@data;
+
+	@sorted_tags = @sorted_tags[ 0 .. $N - 1];
+	print "wanted $N tags, got ", scalar(@sorted_tags), "\n";
+	return \@sorted_tags;
+}

@@ -1,0 +1,45 @@
+#!/bin/bash
+
+if [[ $# -lt 3 ]]; then
+	echo Syntax: pdbpdb2filt.sh  pdb1.pdb pdb2.pdb output.filt
+	exit 1
+fi
+
+
+#ln -s /work/mtyka/software/ /scratch/luholm
+namei=$(basename $1  .pdb ) 
+namej=$(basename $2  .pdb )
+absi=$(readlink -f  $1 )
+absj=$(readlink -f  $2 )
+output=$(readlink -f $3)
+
+tempdir=tmp_$RANDOM 
+rm -rf $tempdir 
+mkdir -p $tempdir
+cd $tempdir
+
+ln -s $absi pdbi.pdb
+ln -s $absj pdbj.pdb
+
+
+##DALI
+/work/tex/src/DaliLite_3.1/Bin/DaliLite -pairwise pdbi.pdb pdbj.pdb 
+/work/tex/src/cm_scripts/bin/dali2filt.py aln.html $(basename $1) $(basename $2) >> dali.filt 
+
+####MAXSUB
+##/work/mtyka/bin/maxsub_filt/mammoth_filt -q pdbi.pdb -t pdbj.pdb -Q $namei -T "$namej"_60  -o temp -R 6.0; if [ "$(grep NOALIGNMENT temp -c)" == "0" ]; then cat temp >> maxsub.filt; fi
+##/work/mtyka/bin/maxsub_filt/mammoth_filt -q pdbi.pdb -t pdbj.pdb -Q $namei -T "$namej"_40  -o temp -R 4.0; if [ "$(grep NOALIGNMENT temp -c)" == "0" ]; then cat temp >> maxsub.filt; fi
+##/work/mtyka/bin/maxsub_filt/mammoth_filt -q pdbi.pdb -t pdbj.pdb -Q $namei -T "$namej"_20  -o temp -R 2.0; if [ "$(grep NOALIGNMENT temp -c)" == "0" ]; then cat temp >> maxsub.filt; fi
+##
+##
+####MAMMOTH_MULT
+##
+##
+##
+##cat dali.filt maxsub.filt mammoth.filt >> ../$3
+##
+
+cat dali.filt > $output 
+
+cd ..
+rm -rf $tempdir 

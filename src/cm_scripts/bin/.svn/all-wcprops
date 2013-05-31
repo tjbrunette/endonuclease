@@ -1,0 +1,527 @@
+K 25
+svn:wc:ra_dav:version-url
+V 43
+/source/!svn/ver/48759/trunk/cm_scripts/bin
+END
+silent_extract_lowscore.pl
+K 25
+svn:wc:ra_dav:version-url
+V 70
+/source/!svn/ver/48762/trunk/cm_scripts/bin/silent_extract_lowscore.pl
+END
+fast_score.py
+K 25
+svn:wc:ra_dav:version-url
+V 57
+/source/!svn/ver/48575/trunk/cm_scripts/bin/fast_score.py
+END
+convert_aln.pl
+K 25
+svn:wc:ra_dav:version-url
+V 58
+/source/!svn/ver/45852/trunk/cm_scripts/bin/convert_aln.pl
+END
+vote.pl
+K 25
+svn:wc:ra_dav:version-url
+V 51
+/source/!svn/ver/45759/trunk/cm_scripts/bin/vote.pl
+END
+cst_ll.pl
+K 25
+svn:wc:ra_dav:version-url
+V 53
+/source/!svn/ver/39085/trunk/cm_scripts/bin/cst_ll.pl
+END
+resample_scorefile.py
+K 25
+svn:wc:ra_dav:version-url
+V 65
+/source/!svn/ver/47217/trunk/cm_scripts/bin/resample_scorefile.py
+END
+pdb2fasta.py
+K 25
+svn:wc:ra_dav:version-url
+V 56
+/source/!svn/ver/39836/trunk/cm_scripts/bin/pdb2fasta.py
+END
+run_modeller.pl
+K 25
+svn:wc:ra_dav:version-url
+V 59
+/source/!svn/ver/41917/trunk/cm_scripts/bin/run_modeller.pl
+END
+pdblookback.py
+K 25
+svn:wc:ra_dav:version-url
+V 58
+/source/!svn/ver/48747/trunk/cm_scripts/bin/pdblookback.py
+END
+setup_nl.pl
+K 25
+svn:wc:ra_dav:version-url
+V 55
+/source/!svn/ver/44846/trunk/cm_scripts/bin/setup_nl.pl
+END
+get_templates.pl
+K 25
+svn:wc:ra_dav:version-url
+V 60
+/source/!svn/ver/40862/trunk/cm_scripts/bin/get_templates.pl
+END
+frag_qual.pl
+K 25
+svn:wc:ra_dav:version-url
+V 56
+/source/!svn/ver/44843/trunk/cm_scripts/bin/frag_qual.pl
+END
+run_svm2.perl
+K 25
+svn:wc:ra_dav:version-url
+V 57
+/source/!svn/ver/48475/trunk/cm_scripts/bin/run_svm2.perl
+END
+make_incorrect_restraints.pl
+K 25
+svn:wc:ra_dav:version-url
+V 72
+/source/!svn/ver/40774/trunk/cm_scripts/bin/make_incorrect_restraints.pl
+END
+make_nmr_ensemble.pl
+K 25
+svn:wc:ra_dav:version-url
+V 64
+/source/!svn/ver/45006/trunk/cm_scripts/bin/make_nmr_ensemble.pl
+END
+run-nrb_alignments.pl
+K 25
+svn:wc:ra_dav:version-url
+V 65
+/source/!svn/ver/47055/trunk/cm_scripts/bin/run-nrb_alignments.pl
+END
+contactmap.py
+K 25
+svn:wc:ra_dav:version-url
+V 57
+/source/!svn/ver/48750/trunk/cm_scripts/bin/contactmap.py
+END
+run-mcce.pl
+K 25
+svn:wc:ra_dav:version-url
+V 55
+/source/!svn/ver/36283/trunk/cm_scripts/bin/run-mcce.pl
+END
+cluster_and_pick.pl
+K 25
+svn:wc:ra_dav:version-url
+V 63
+/source/!svn/ver/44420/trunk/cm_scripts/bin/cluster_and_pick.pl
+END
+dssp.pl
+K 25
+svn:wc:ra_dav:version-url
+V 51
+/source/!svn/ver/40033/trunk/cm_scripts/bin/dssp.pl
+END
+setup_symmetry.pl
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/source/!svn/ver/45868/trunk/cm_scripts/bin/setup_symmetry.pl
+END
+add_frags_from_templates.pl
+K 25
+svn:wc:ra_dav:version-url
+V 71
+/source/!svn/ver/44447/trunk/cm_scripts/bin/add_frags_from_templates.pl
+END
+run_local.pl
+K 25
+svn:wc:ra_dav:version-url
+V 56
+/source/!svn/ver/48314/trunk/cm_scripts/bin/run_local.pl
+END
+trim_nmr_disorder.pl
+K 25
+svn:wc:ra_dav:version-url
+V 64
+/source/!svn/ver/41812/trunk/cm_scripts/bin/trim_nmr_disorder.pl
+END
+cluster_batch.pl
+K 25
+svn:wc:ra_dav:version-url
+V 60
+/source/!svn/ver/40598/trunk/cm_scripts/bin/cluster_batch.pl
+END
+run-psiblast.pl
+K 25
+svn:wc:ra_dav:version-url
+V 59
+/source/!svn/ver/39836/trunk/cm_scripts/bin/run-psiblast.pl
+END
+psipred.py
+K 25
+svn:wc:ra_dav:version-url
+V 54
+/source/!svn/ver/45678/trunk/cm_scripts/bin/psipred.py
+END
+run-hhsearch.pl
+K 25
+svn:wc:ra_dav:version-url
+V 59
+/source/!svn/ver/47757/trunk/cm_scripts/bin/run-hhsearch.pl
+END
+dali2filt.py
+K 25
+svn:wc:ra_dav:version-url
+V 56
+/source/!svn/ver/40364/trunk/cm_scripts/bin/dali2filt.py
+END
+migrate.pl
+K 25
+svn:wc:ra_dav:version-url
+V 54
+/source/!svn/ver/35920/trunk/cm_scripts/bin/migrate.pl
+END
+nmr_mqa.pl
+K 25
+svn:wc:ra_dav:version-url
+V 54
+/source/!svn/ver/41307/trunk/cm_scripts/bin/nmr_mqa.pl
+END
+pdb2bmrb.pl
+K 25
+svn:wc:ra_dav:version-url
+V 55
+/source/!svn/ver/45525/trunk/cm_scripts/bin/pdb2bmrb.pl
+END
+renumber_alns.pl
+K 25
+svn:wc:ra_dav:version-url
+V 60
+/source/!svn/ver/46950/trunk/cm_scripts/bin/renumber_alns.pl
+END
+make_pCorrect_from_tmLookback.rb
+K 25
+svn:wc:ra_dav:version-url
+V 76
+/source/!svn/ver/47840/trunk/cm_scripts/bin/make_pCorrect_from_tmLookback.rb
+END
+make_clusters.pl
+K 25
+svn:wc:ra_dav:version-url
+V 60
+/source/!svn/ver/46298/trunk/cm_scripts/bin/make_clusters.pl
+END
+resample_silent.py
+K 25
+svn:wc:ra_dav:version-url
+V 62
+/source/!svn/ver/47211/trunk/cm_scripts/bin/resample_silent.py
+END
+renumber_pdb.pl
+K 25
+svn:wc:ra_dav:version-url
+V 59
+/source/!svn/ver/44845/trunk/cm_scripts/bin/renumber_pdb.pl
+END
+make_bounded_csts.pl
+K 25
+svn:wc:ra_dav:version-url
+V 64
+/source/!svn/ver/45500/trunk/cm_scripts/bin/make_bounded_csts.pl
+END
+bmrb2talos.com
+K 25
+svn:wc:ra_dav:version-url
+V 58
+/source/!svn/ver/41066/trunk/cm_scripts/bin/bmrb2talos.com
+END
+sync.pl
+K 25
+svn:wc:ra_dav:version-url
+V 51
+/source/!svn/ver/40208/trunk/cm_scripts/bin/sync.pl
+END
+rescore_alns.pl
+K 25
+svn:wc:ra_dav:version-url
+V 59
+/source/!svn/ver/37072/trunk/cm_scripts/bin/rescore_alns.pl
+END
+extract_low_energy.py
+K 25
+svn:wc:ra_dav:version-url
+V 65
+/source/!svn/ver/48751/trunk/cm_scripts/bin/extract_low_energy.py
+END
+get_pdb.py
+K 25
+svn:wc:ra_dav:version-url
+V 54
+/source/!svn/ver/47757/trunk/cm_scripts/bin/get_pdb.py
+END
+date_filter.pl
+K 25
+svn:wc:ra_dav:version-url
+V 58
+/source/!svn/ver/44844/trunk/cm_scripts/bin/date_filter.pl
+END
+amino_acids.py
+K 25
+svn:wc:ra_dav:version-url
+V 58
+/source/!svn/ver/45759/trunk/cm_scripts/bin/amino_acids.py
+END
+indent_problems.pl
+K 25
+svn:wc:ra_dav:version-url
+V 62
+/source/!svn/ver/46219/trunk/cm_scripts/bin/indent_problems.pl
+END
+make_qsub.py
+K 25
+svn:wc:ra_dav:version-url
+V 56
+/source/!svn/ver/45490/trunk/cm_scripts/bin/make_qsub.py
+END
+all_pairwise_tmalign.pl
+K 25
+svn:wc:ra_dav:version-url
+V 67
+/source/!svn/ver/45604/trunk/cm_scripts/bin/all_pairwise_tmalign.pl
+END
+predict_distances.pl
+K 25
+svn:wc:ra_dav:version-url
+V 64
+/source/!svn/ver/48749/trunk/cm_scripts/bin/predict_distances.pl
+END
+conserved_core_identical.py
+K 25
+svn:wc:ra_dav:version-url
+V 71
+/source/!svn/ver/47664/trunk/cm_scripts/bin/conserved_core_identical.py
+END
+combine_silent.pl
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/source/!svn/ver/39770/trunk/cm_scripts/bin/combine_silent.pl
+END
+pdbpdb2filt.sh
+K 25
+svn:wc:ra_dav:version-url
+V 58
+/source/!svn/ver/40496/trunk/cm_scripts/bin/pdbpdb2filt.sh
+END
+analyze_template_distances.pl
+K 25
+svn:wc:ra_dav:version-url
+V 73
+/source/!svn/ver/34797/trunk/cm_scripts/bin/analyze_template_distances.pl
+END
+setup_broker_refine.pl
+K 25
+svn:wc:ra_dav:version-url
+V 66
+/source/!svn/ver/41307/trunk/cm_scripts/bin/setup_broker_refine.pl
+END
+run-sparksX.pl
+K 25
+svn:wc:ra_dav:version-url
+V 58
+/source/!svn/ver/47757/trunk/cm_scripts/bin/run-sparksX.pl
+END
+pretty_table.pl
+K 25
+svn:wc:ra_dav:version-url
+V 59
+/source/!svn/ver/47757/trunk/cm_scripts/bin/pretty_table.pl
+END
+robetta_submit.py
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/source/!svn/ver/48119/trunk/cm_scripts/bin/robetta_submit.py
+END
+update_restraints.pl
+K 25
+svn:wc:ra_dav:version-url
+V 64
+/source/!svn/ver/40598/trunk/cm_scripts/bin/update_restraints.pl
+END
+pdb2vall_lines.pl
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/source/!svn/ver/44469/trunk/cm_scripts/bin/pdb2vall_lines.pl
+END
+pdb2cst.pl
+K 25
+svn:wc:ra_dav:version-url
+V 54
+/source/!svn/ver/41812/trunk/cm_scripts/bin/pdb2cst.pl
+END
+run-raptorX.pl
+K 25
+svn:wc:ra_dav:version-url
+V 58
+/source/!svn/ver/47824/trunk/cm_scripts/bin/run-raptorX.pl
+END
+reduce_csts.pl
+K 25
+svn:wc:ra_dav:version-url
+V 58
+/source/!svn/ver/43482/trunk/cm_scripts/bin/reduce_csts.pl
+END
+dist.pl
+K 25
+svn:wc:ra_dav:version-url
+V 51
+/source/!svn/ver/40598/trunk/cm_scripts/bin/dist.pl
+END
+clone_job.py
+K 25
+svn:wc:ra_dav:version-url
+V 56
+/source/!svn/ver/47143/trunk/cm_scripts/bin/clone_job.py
+END
+make_hyak_job
+K 25
+svn:wc:ra_dav:version-url
+V 57
+/source/!svn/ver/46360/trunk/cm_scripts/bin/make_hyak_job
+END
+score_aln_hhsearch.pl
+K 25
+svn:wc:ra_dav:version-url
+V 65
+/source/!svn/ver/45003/trunk/cm_scripts/bin/score_aln_hhsearch.pl
+END
+tmalign_pt.py
+K 25
+svn:wc:ra_dav:version-url
+V 57
+/source/!svn/ver/48701/trunk/cm_scripts/bin/tmalign_pt.py
+END
+predict_difficulty.pl
+K 25
+svn:wc:ra_dav:version-url
+V 65
+/source/!svn/ver/47818/trunk/cm_scripts/bin/predict_difficulty.pl
+END
+smart_rename.pl
+K 25
+svn:wc:ra_dav:version-url
+V 59
+/source/!svn/ver/41373/trunk/cm_scripts/bin/smart_rename.pl
+END
+update_boinc_results.pl
+K 25
+svn:wc:ra_dav:version-url
+V 67
+/source/!svn/ver/48749/trunk/cm_scripts/bin/update_boinc_results.pl
+END
+calc_tmalign.pl
+K 25
+svn:wc:ra_dav:version-url
+V 59
+/source/!svn/ver/46282/trunk/cm_scripts/bin/calc_tmalign.pl
+END
+rerank_templates.py
+K 25
+svn:wc:ra_dav:version-url
+V 63
+/source/!svn/ver/48703/trunk/cm_scripts/bin/rerank_templates.py
+END
+analyze_nmr.pl
+K 25
+svn:wc:ra_dav:version-url
+V 58
+/source/!svn/ver/42633/trunk/cm_scripts/bin/analyze_nmr.pl
+END
+make_fragments.pl
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/source/!svn/ver/46008/trunk/cm_scripts/bin/make_fragments.pl
+END
+column_extract.pl
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/source/!svn/ver/44420/trunk/cm_scripts/bin/column_extract.pl
+END
+get_pdbs.pl
+K 25
+svn:wc:ra_dav:version-url
+V 55
+/source/!svn/ver/43667/trunk/cm_scripts/bin/get_pdbs.pl
+END
+make-hhm.pl
+K 25
+svn:wc:ra_dav:version-url
+V 55
+/source/!svn/ver/45918/trunk/cm_scripts/bin/make-hhm.pl
+END
+james_cst_prob.pl
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/source/!svn/ver/47839/trunk/cm_scripts/bin/james_cst_prob.pl
+END
+ss_chunk.py
+K 25
+svn:wc:ra_dav:version-url
+V 55
+/source/!svn/ver/45816/trunk/cm_scripts/bin/ss_chunk.py
+END
+jackhmmer_aln.pl
+K 25
+svn:wc:ra_dav:version-url
+V 60
+/source/!svn/ver/47757/trunk/cm_scripts/bin/jackhmmer_aln.pl
+END
+getFastaFromCoords.pl
+K 25
+svn:wc:ra_dav:version-url
+V 65
+/source/!svn/ver/45860/trunk/cm_scripts/bin/getFastaFromCoords.pl
+END
+truncate_scorefile.py
+K 25
+svn:wc:ra_dav:version-url
+V 65
+/source/!svn/ver/48354/trunk/cm_scripts/bin/truncate_scorefile.py
+END
+permute_restraints.pl
+K 25
+svn:wc:ra_dav:version-url
+V 65
+/source/!svn/ver/40765/trunk/cm_scripts/bin/permute_restraints.pl
+END
+cst_unique_residues.py
+K 25
+svn:wc:ra_dav:version-url
+V 66
+/source/!svn/ver/47677/trunk/cm_scripts/bin/cst_unique_residues.py
+END
+make_bad_alignments.pl
+K 25
+svn:wc:ra_dav:version-url
+V 66
+/source/!svn/ver/41419/trunk/cm_scripts/bin/make_bad_alignments.pl
+END
+make_ev_map.pl
+K 25
+svn:wc:ra_dav:version-url
+V 58
+/source/!svn/ver/45983/trunk/cm_scripts/bin/make_ev_map.pl
+END
+conserved_core_nonidentical.py
+K 25
+svn:wc:ra_dav:version-url
+V 74
+/source/!svn/ver/47664/trunk/cm_scripts/bin/conserved_core_nonidentical.py
+END

@@ -1,0 +1,218 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use List::Util qw/ max /;
+use Getopt::Long;
+
+my %options;
+$options{native}      = '/work/tex/casp9_benchmark/natives/T0552.pdb';
+$options{cstfile}     = 'T0552.dist_csts';
+$options{dist_cutoff} = 6;
+$options{cleanup}     = 1;
+$options{out_fn}      = 0;
+$options{pdf_fn}      = 'heatmap.pdf';
+
+&GetOptions(
+	\%options,
+	"cstfile=s",
+	"dist_cutoff=s",
+	"native=s",
+	"pdf_fn=s",
+	"out_fn=s",
+	"cleanup!",
+);
+
+open FILE, "<$options{cstfile}" or die $!;
+my %csts;
+my $max_res = 0;
+LINE: while ( my $line = <FILE> ) {
+	chomp $line;
+	if ( $line =~ /AtomPair\s+(\w+)\s+(\d+)\s+(\w+)\s+(\d+)\s*(.*)\s*SOGFUNC\s+(\d+)\s+(.*)/ ) {
+		my $atmi   = $1;
+		my $resi   = $2;
+		my $atmj   = $3;
+		my $resj   = $4;
+		my $middle = $5;
+		my $ncst   = $6;
+		my $rest   = $7;
+
+		my $reweight_factor = 1;
+		if ( length($middle) > 0 && $middle =~ /SCALARWEIGHTEDFUNC\s+([\d\.\-]+)/ ) {
+			$reweight_factor = $1;
+		}
+
+		my @d = split /\s+/, $rest;
+		if ( scalar(@d) != $ncst*3 ) { die "Error: cst count mismatch!\n"; }
+
+		my @csts;
+		while (@d) {
+			my $mean   = shift @d;
+			my $sdev   = shift @d;
+			my $weight = shift @d;
+			push @{ $csts{$resi}{$resj} }, { mean => $mean, sdev => $sdev, weight => $weight * $reweight_factor };
+			#push @csts, { mean => $mean, sdev => $sdev, weight => $weight };
+		}
+		#print $line, "\n";
+		#last LINE;
+		$max_res = max( $max_res, $resi, $resj );
+	}
+}
+close FILE or die $!;
+
+open FILE, ">.rsc" or die $!;
+foreach my $resi (keys %csts) {
+foreach my $resj (keys %{$csts{$resi}}) {
+	#print join ' ', ( $resi, $resj, calc_mixture_cdf($options{dist_cutoff}, \@csts) );
+	#print "\n";
+	my $calc = make_cdf_calc($options{dist_cutoff},$csts{$resi}{$resj});
+	print FILE "print( paste($resi,$resj,$calc))\n";
+}
+}
+close FILE or die $!;
+
+my $output = `R --no-save < .rsc`;
+my @columns = qw/ resi resj prob /;
+my $contacts;
+if ( $options{native} ) {
+	$contacts = get_contacts( $options{dist_cutoff}, $options{native} );
+	push @columns, 'native_contact';
+}
+
+print join ' ', @columns;
+print "\n";
+if ( $options{pdf_fn} ) {
+	open DATA, ">$options{pdf_fn}.data";
+	print DATA join ' ', @columns;
+	print DATA "\n";
+}
+while ( $output =~ /\[1\]\s+"(\d+)\s+(\d+)\s+([\d\.]+)/g ) {
+	my $resi = $1;
+	my $resj = $2;
+	my $prob = $3;
+
+	my @output = ($resi,$resj,$prob);
+	if ( $options{native} ) {
+		my $contact = 0;
+		if ( exists $contacts->{$resi}{$resj} ) {
+			$contact = $contacts->{$resi}{$resj};
+		}
+		push @output, $contact;
+	}
+	print join ' ', @output;
+	print "\n";
+	if ( $options{pdf_fn} ) {
+		print DATA join ' ', @output;
+		print DATA "\n";
+	}
+}
+if ( $options{pdf_fn} ) {
+	close DATA or die $!;
+}
+my $r_script = <<RSC;
+d = read.table("$options{pdf_fn}.data", header = T)
+print( summary(d) )
+
+lim = c( min(1,d\$resj), max(1,d\$resj) )
+
+z = matrix( 0, nrow = lim[2], ncol = lim[2] )
+for ( i in 1:nrow(d) ) {
+		z[d\$resi[i],d\$resj[i]] = d\$prob[i]
+}
+
+n_colors = round( max(d\$prob) * 100 ) / 2
+print( n_colors )
+
+pdf( "$options{pdf_fn}" )
+
+colors = c( "white", rainbow( n_colors, start = 0.0, end = 0.7 ) )
+#filled.contour(z, col = colors, x = lim[1]:lim[2], y = lim[1]:lim[2])
+image( z, col = colors, x = lim[1]:lim[2], y = lim[1]:lim[2], xlab = "", ylab = "", main = "$options{cstfile}")
+#abline( a = 0, b = 1 )
+
+s = d[ d\$native_contact > 0, ]
+points( s\$resi, s\$resj, pch = 22, cex = 0.7, lwd = 0.7 )
+
+dev.off()
+RSC
+
+open FILE, ">$options{pdf_fn}.R" or die $!;
+print FILE $r_script;
+close FILE or die $!;
+
+sub make_cdf_calc {
+	my $cutoff = shift;
+	my $csts   = shift;
+
+	my $calc = join ' + ', (
+		map{$_->{weight}."*"."pnorm(".$cutoff.",".$_->{mean}.",".$_->{sdev}.")"}
+			@$csts
+	);
+	return $calc;
+}
+
+sub calc_mixture_cdf {
+	my $cutoff = shift;
+	my $csts = shift;
+
+	my $cum_prob = 0;
+	foreach my $cst (@$csts) {
+		my $prob = calc_gaussian_cdf( $cutoff, $cst );
+		$cum_prob += $prob * $cst->{weight};
+	}
+	return $cum_prob;
+}
+
+sub calc_gaussian_cdf {
+	my $cutoff = shift;
+	my $cst    = shift;
+
+	my $mean = $cst->{mean};
+	my $sdev = $cst->{sdev};
+	my $tmp_scr = ".tmp.Rscript";
+	open  OUT, ">$tmp_scr" or die $!;
+	print OUT "print( pnorm( $cutoff, mean = $mean, sd = $sdev ) )\n";
+	close OUT or die $!;
+
+	my $output = `R --no-save < .tmp.Rscript`;
+	if ( $output =~ /\[1\]\s+([\-e\d\.]+)/ ) {
+		return $1;
+	}
+
+	die "Error: didn't parse cdf from $output!\n";
+}
+
+sub get_contacts {
+	my $dist_cutoff = shift;
+	my $pdb         = shift;
+
+	my $cmd = join ' ', (
+		"/work/tex/src/rosetta/rosetta_source/bin/batch_distances.linuxgccrelease",
+		"-in:file:s $pdb -mute all",
+		"-dist_thresholds $dist_cutoff ",
+		"-chemical:exclude_patches LowerDNA UpperDNA Cterm_amidation SpecialRotamer VirtualBB ShoveBB VirtualDNAPhosphate VirtualNTerm CTermConnect sc_orbitals pro_hydroxylated_case1 pro_hydroxylated_case2 ser_phosphorylated thr_phosphorylated tyr_phosphorylated tyr_sulfated lys_dimethylated lys_monomethylated lys_trimethylated lys_acetylated glu_carboxylated cys_acetylated tyr_diiodinated N_acetylated C_methylamidated MethylatedProteinCterm -chemical:exclude_patches ActeylatedProteinNterm",
+	);
+	open PDB_INPUT, "$cmd |";
+
+	my %contacts;
+	while ( my $line = <PDB_INPUT> ) {
+		if ( $line =~ /CA/ ) {
+			chomp $line;
+			my (
+				undef,
+				$resi_idx, $resj_idx,
+				$resi, $resj,
+				$atomi, $atomj,
+				$buriali, $burialj,
+				$dist,
+				$current_id
+			) = split /\s+/, $line;
+			if ( $atomi =~ /CA/ && $atomj =~ /CA/ && $dist < $dist_cutoff ) {
+				$contacts{$resi_idx}{$resj_idx} = 1;
+			}
+		}
+	}
+
+	return \%contacts;
+}

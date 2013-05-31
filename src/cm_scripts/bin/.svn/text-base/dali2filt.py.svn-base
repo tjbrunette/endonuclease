@@ -1,0 +1,82 @@
+#!/usr/bin/python
+import sys
+import string 
+
+def Help():
+    print sys.argv[0]+' dali_aln.html_file  queryid  targetid'
+    print
+    sys.exit()
+
+
+if len(sys.argv) < 2:
+    Help()
+
+dalifile = sys.argv[1]
+data = open(dalifile,'r').read()
+lines = string.split(data,'\n')
+
+query_seq = ""
+sbjct_seq = ""
+query_raw_seq = ""
+sbjct_raw_seq = ""
+
+for i in lines:
+	token = string.split(i)
+	
+	if len(token) > 0 :
+		if token[0][0:6] == "</PRE>": 
+			if ( len(query_raw_seq) > 0 ):
+				break
+	
+	if len(token) < 2 : continue;
+
+
+	if token[0] == "Query":
+		query_raw_seq = query_raw_seq + token[1]
+	if token[0] == "Sbjct":
+		sbjct_raw_seq = sbjct_raw_seq + token[1]
+			
+		
+
+
+
+	
+	
+	
+	
+for i in range(0,len(query_raw_seq)):
+		c_query = query_raw_seq[i]
+		s_query = sbjct_raw_seq[i]
+
+		if ( c_query >= 'A' and c_query <= 'Z' ):
+			query_seq = query_seq + c_query
+			sbjct_seq = sbjct_seq + s_query
+
+		if s_query == "." and ( c_query >= 'a' and c_query <= 'z' ): 
+			query_seq = query_seq + c_query.upper()
+			sbjct_seq = sbjct_seq + '-'    
+		
+		if c_query == "." and ( s_query >= 'a' and s_query <= 'z' ): 
+			query_seq = query_seq + '-'    
+			sbjct_seq = sbjct_seq + s_query.upper()
+		
+		if ( c_query >= 'a' and c_query <= 'z' ) and ( s_query >= 'a' and s_query <= 'z' ): 
+			query_seq = query_seq + '-'    
+			sbjct_seq = sbjct_seq + s_query.upper()
+			query_seq = query_seq + c_query.upper()
+			sbjct_seq = sbjct_seq + '-'    
+
+			
+
+if len(query_seq) > 0:
+	print '## ', sys.argv[2], sys.argv[3] 
+	print '# dali: ',  sys.argv[2], sys.argv[3]  
+	print 'scores_from_program:    0 0 '
+	print "0", query_seq 
+	print "0", sbjct_seq 
+	print "--"
+
+
+
+
+

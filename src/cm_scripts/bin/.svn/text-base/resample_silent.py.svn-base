@@ -1,0 +1,66 @@
+#! /usr/bin/env python
+#
+# Selects a subset of the entries of a silent file using reservoir sampling
+# in O(n) time and O(k) memory.
+
+import os, random, re, subprocess
+from argparse import ArgumentParser
+
+def safe_rm(filename):
+    try:
+        os.remove(filename)
+    except:
+        pass
+
+if __name__ == '__main__':
+    from os.path import basename
+
+    parser = ArgumentParser()
+    parser.add_argument('--in', required = True, help = 'Input silent file')
+    parser.add_argument('--out', required = True, help = 'Output silent file')
+    parser.add_argument('--num', required = True, help = 'Number of entries to return')
+    options = vars(parser.parse_args())
+
+    # Create a silent file containing the score lines
+    score_fn = basename(options['in']) + '.tmp.sc'
+    os.system('grep ^SCORE %s > %s' % (options['in'], score_fn))
+
+    # Reservoir sample the score lines
+    resamp_fn = basename(options['in']) + '.resamp.sc'
+    subprocess.call(['/work/cmiles/src/cm_scripts/bin/resample_scorefile.py', '--in', score_fn, '--out', resamp_fn, '--num', options['num']])
+
+    # Retrieve the selected tags
+    tags = []
+    with open(resamp_fn) as file:
+        header = file.readline()
+        header_cols = header.split()
+        idx = header_cols.index('description')
+
+        for line in file:
+            line = line.strip()
+            cols = line.split()
+
+            if len(cols) != len(header_cols):
+                continue
+
+            desc = cols[idx]
+            tags.append(desc)
+
+    # Extract the selected tags from the input silent file
+    extract_cmd = ['/work/cmiles/src/rosetta/rosetta_source/bin/combine_silent.linuxgccrelease',
+                   '-database /work/cmiles/src/rosetta/rosetta_database',
+                   '-in:file:silent_struct_type binary',
+                   '-in:file:silent',
+                   options['in'],
+                   '-out:file:silent_struct_type binary',
+                   '-out:file:silent',
+                   options['out'],
+                   '-tags',
+                   ' '.join(tags)]
+
+    os.system(' '.join(extract_cmd))
+
+    # Remove temporary files
+    safe_rm(score_fn)
+    safe_rm(resamp_fn)
+

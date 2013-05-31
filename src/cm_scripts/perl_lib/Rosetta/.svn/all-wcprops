@@ -1,0 +1,137 @@
+K 25
+svn:wc:ra_dav:version-url
+V 56
+/source/!svn/ver/48061/trunk/cm_scripts/perl_lib/Rosetta
+END
+Instance.pm
+K 25
+svn:wc:ra_dav:version-url
+V 68
+/source/!svn/ver/45686/trunk/cm_scripts/perl_lib/Rosetta/Instance.pm
+END
+PDB.pm
+K 25
+svn:wc:ra_dav:version-url
+V 63
+/source/!svn/ver/44355/trunk/cm_scripts/perl_lib/Rosetta/PDB.pm
+END
+JobList.pm
+K 25
+svn:wc:ra_dav:version-url
+V 67
+/source/!svn/ver/35973/trunk/cm_scripts/perl_lib/Rosetta/JobList.pm
+END
+Constraints.pm
+K 25
+svn:wc:ra_dav:version-url
+V 71
+/source/!svn/ver/39876/trunk/cm_scripts/perl_lib/Rosetta/Constraints.pm
+END
+Sequence.pm
+K 25
+svn:wc:ra_dav:version-url
+V 68
+/source/!svn/ver/44355/trunk/cm_scripts/perl_lib/Rosetta/Sequence.pm
+END
+Cartesian.pm
+K 25
+svn:wc:ra_dav:version-url
+V 69
+/source/!svn/ver/38905/trunk/cm_scripts/perl_lib/Rosetta/Cartesian.pm
+END
+TargetFiles.pm
+K 25
+svn:wc:ra_dav:version-url
+V 71
+/source/!svn/ver/43481/trunk/cm_scripts/perl_lib/Rosetta/TargetFiles.pm
+END
+Job.pm
+K 25
+svn:wc:ra_dav:version-url
+V 63
+/source/!svn/ver/43481/trunk/cm_scripts/perl_lib/Rosetta/Job.pm
+END
+AlignmentPDBmatchAndFix.pm
+K 25
+svn:wc:ra_dav:version-url
+V 83
+/source/!svn/ver/46936/trunk/cm_scripts/perl_lib/Rosetta/AlignmentPDBmatchAndFix.pm
+END
+Template.pm
+K 25
+svn:wc:ra_dav:version-url
+V 68
+/source/!svn/ver/48061/trunk/cm_scripts/perl_lib/Rosetta/Template.pm
+END
+FileUtil.pm
+K 25
+svn:wc:ra_dav:version-url
+V 68
+/source/!svn/ver/35866/trunk/cm_scripts/perl_lib/Rosetta/FileUtil.pm
+END
+Util.pm
+K 25
+svn:wc:ra_dav:version-url
+V 64
+/source/!svn/ver/40724/trunk/cm_scripts/perl_lib/Rosetta/Util.pm
+END
+date_map.txt
+K 25
+svn:wc:ra_dav:version-url
+V 69
+/source/!svn/ver/46142/trunk/cm_scripts/perl_lib/Rosetta/date_map.txt
+END
+AlignmentClustering.pm
+K 25
+svn:wc:ra_dav:version-url
+V 79
+/source/!svn/ver/45952/trunk/cm_scripts/perl_lib/Rosetta/AlignmentClustering.pm
+END
+JobGenerator.pm
+K 25
+svn:wc:ra_dav:version-url
+V 72
+/source/!svn/ver/38904/trunk/cm_scripts/perl_lib/Rosetta/JobGenerator.pm
+END
+AA.pm
+K 25
+svn:wc:ra_dav:version-url
+V 62
+/source/!svn/ver/38446/trunk/cm_scripts/perl_lib/Rosetta/AA.pm
+END
+Native.pm
+K 25
+svn:wc:ra_dav:version-url
+V 66
+/source/!svn/ver/39978/trunk/cm_scripts/perl_lib/Rosetta/Native.pm
+END
+Fragments.pm
+K 25
+svn:wc:ra_dav:version-url
+V 69
+/source/!svn/ver/45663/trunk/cm_scripts/perl_lib/Rosetta/Fragments.pm
+END
+align_util.pm
+K 25
+svn:wc:ra_dav:version-url
+V 70
+/source/!svn/ver/46224/trunk/cm_scripts/perl_lib/Rosetta/align_util.pm
+END
+Statistics.pm
+K 25
+svn:wc:ra_dav:version-url
+V 70
+/source/!svn/ver/36050/trunk/cm_scripts/perl_lib/Rosetta/Statistics.pm
+END
+Protocol.pm
+K 25
+svn:wc:ra_dav:version-url
+V 68
+/source/!svn/ver/45602/trunk/cm_scripts/perl_lib/Rosetta/Protocol.pm
+END
+PDB_Date.pm
+K 25
+svn:wc:ra_dav:version-url
+V 68
+/source/!svn/ver/46142/trunk/cm_scripts/perl_lib/Rosetta/PDB_Date.pm
+END

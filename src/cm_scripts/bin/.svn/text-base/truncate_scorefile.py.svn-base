@@ -1,0 +1,44 @@
+#! /usr/bin/env python2.7
+#
+# Ensures that the number of columns in a score file's header line and
+# data lines match. If a mismatch is detected, columns are truncated
+# from the data line to match the header.
+
+import re
+from argparse import ArgumentParser
+
+if __name__ == '__main__':
+    parser = ArgumentParser()
+    parser.add_argument('--in', required = True, help = 'Input score file')
+    parser.add_argument('--out', required = True, help = 'Output score file')
+
+    options = vars(parser.parse_args())
+
+    regex = re.compile('SCORE')
+
+    with open(options['in']) as fin:
+        with open(options['out'], 'w') as fout:
+            # Identify header line in input
+            line = ''
+            for line in fin:
+                if not regex.match(line):
+                    # passthrough
+                    fout.write(line)
+                else:
+                    break
+
+            header = line
+            header_cols = len(header.split())
+            fout.write(header)
+
+            # Resume reading input
+            for line in fin:
+                line = line.strip()
+
+                if not regex.match(line):
+                    # passthrough
+                    fout.write(line)
+                else:
+                    cols = line.split()
+                    fout.write('\t'.join(cols[:header_cols]))
+                    fout.write('\n')

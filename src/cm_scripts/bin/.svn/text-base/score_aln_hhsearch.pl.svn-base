@@ -1,0 +1,164 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use Getopt::Long;
+
+my %options;
+$options{script_base}        = '/work/tex/src/cm_scripts/';
+$options{n_procs}            = 1;
+$options{hhsearch_path}      = '/work/tex/hhsearch';
+$options{cal_db}             = '/work/tex/hhsearch/db/cal.hhm';
+$options{db}                 = [ '/local/USERS/evolvable_database/hhm8' ];
+$options{max_e_value}        = 0.1;
+$options{min_query_coverage} = 20;
+
+use lib '/work/tex/src/cm_scripts/perl_lib';
+use Rosetta::Job;
+use Rosetta::Util;
+use Rosetta::Sequence qw/ read_protein_fasta_fn /;
+
+&GetOptions(
+	\%options,
+	"db=s",
+	"n_procs=i",
+);
+
+my @fastas = @ARGV;
+my @hhms;
+foreach my $fasta (@fastas) {
+	if ( -f "$fasta.hhm" ) { next; }
+
+	my $hhm_file = make_hhm( $fasta, '.' );
+	push @hhms, $hhm_file;
+}
+
+my @atab_files;
+my $query_hhm = shift @hhms;
+foreach my $hhm (@hhms) {
+	my $base1 = basename($query_hhm,'.hhm');
+	my $base2 = basename($hhm,'.hhm');
+	my $atab_file = join '.', ( $base1, $base2, 'atab' );
+	my $job = Rosetta::Job->new(
+		executable   => assemble_path( $options{hhsearch_path}, 'hhalign' ),
+		args         => "-i $query_hhm -t $hhm -atab $atab_file",
+		lockfile     => "$atab_file.lock",
+		results_file => $atab_file,
+		dir          => '.',
+	);
+	$job->run_with_message( "comparing $query_hhm and $hhm" );
+	push @atab_files, $atab_file;
+}
+
+my $min_score   = -0.05;
+my $query_fasta = read_protein_fasta_fn($fastas[0]); # query fasta
+my $range       = [ 1, length($query_fasta) ];
+
+my $plot_script = <<RSC;
+fns = list.files( pattern = ".atab\$" )
+pdf( "scores.pdf", width = 11, height = 8 )
+
+for ( bw in seq( 1, 11, by = 4 ) ) {
+	idx = 1
+	for ( file in fns ) {
+		d  = read.table( file, header = T )
+		sc = ksmooth( d\$i, d\$score, bandwidth = bw )
+		if ( idx == 1 ) {
+			plot(
+				sc, xlim = c( $range->[0], $range->[1] ),
+				col = idx, type = "l", ylim = c(-0.1,4),
+				main = paste( "$fastas[0] bw", bw ),
+				xlab = "resi", ylab = "hhsearch score"
+			)
+		} else {
+			lines( sc, col = idx )
+		}
+		idx = idx + 1
+	}
+	legend( "bottomright", legend = fns, col = c(1:length(fns)), lty = 1 )
+}
+
+
+dev.off()
+RSC
+
+open  FILE, ">plot.R" or die $!;
+print FILE $plot_script;
+close FILE or die $!;
+
+system( "R --no-save < plot.R" );
+
+sub make_hhm {
+	my $fasta_fn = shift;
+	my $hhm_dir  = shift;
+
+	use File::Path;
+	use File::Copy;
+	use File::Basename;
+
+	my ($id,undef) = basename($fasta_fn,'.fasta');
+	my $local_hhm_dir = $hhm_dir;
+	mkpath $local_hhm_dir;
+
+	if ( -f "$local_hhm_dir/$id.hhm" ) {
+		return "$local_hhm_dir/$id.hhm";
+	}
+
+	# run psi-blast
+	if ( ! -f "$local_hhm_dir/$fasta_fn.tar.gz" ) {
+		my $cmd = "$options{script_base}/bin/run-psiblast.pl --n_procs $options{n_procs} $local_hhm_dir/$fasta_fn --archive";
+		system( $cmd );
+	}
+
+	# extract blast output from the .tar.gz file
+	my $tar_file = "$id.fasta.tar.gz";
+	my $psiblast_output = "$id.fasta.5.psiblast";
+	my $cmd = "cd $local_hhm_dir; tar xzvf $tar_file $psiblast_output";
+	print $cmd, "\n";
+	system( $cmd );
+	if ( ! -f "$local_hhm_dir/$psiblast_output" ) {
+		die "Error: couldn't extract file $psiblast_output from file $tar_file!\n";
+	}
+
+	return psiblast_to_hhm( $id, "$local_hhm_dir/$psiblast_output" );
+}
+
+sub psiblast_to_hhm {
+	use File::Basename;
+
+	my $id = shift;
+	my $psiblast_output = shift;
+	my $local_hhm_dir = dirname  $psiblast_output;
+	$psiblast_output  = basename $psiblast_output;
+
+	if ( -f "$local_hhm_dir/$id.hhm" ) {
+		return "$local_hhm_dir/$id.hhm";
+	}
+
+	# Parse out a multiple alignment from the BLAST results.
+	my $fasta_fn = "$id.fasta";
+	my $a2mfile = "$id.a2m";
+	my $cmd = "cd $local_hhm_dir; $options{hhsearch_path}/alignblast.pl -Q $fasta_fn $psiblast_output $a2mfile";
+	print $cmd, "\n";
+	system( $cmd );
+
+	# add psipred secondary structure information
+	$cmd = "$options{hhsearch_path}/addpsipred.pl $local_hhm_dir/$a2mfile";
+	system( $cmd );
+
+	# make hhms
+	my $a3mfile = "$id.a3m";
+	$cmd = "$options{hhsearch_path}/hhmake -i $local_hhm_dir/$a3mfile";
+	system( $cmd );
+
+	# cleanup temporary files
+	my @suffices = qw/
+		chk sq psi pn sn in.a3m chk mtx mn blalog ss2 ss horiz a2m a3m blast aux
+	/;
+	foreach my $suffix (@suffices) {
+		my $file = "$local_hhm_dir/$id.$suffix";
+		#unlink( $file );
+	}
+	return "$local_hhm_dir/$id.hhm";
+}

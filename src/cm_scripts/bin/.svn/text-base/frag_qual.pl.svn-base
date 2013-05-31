@@ -1,0 +1,39 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use Getopt::Long;
+
+my %options;
+$options{native} = 0;
+&GetOptions(
+	\%options,
+	"native=s",
+);
+
+if ( !$options{native} || ! -f $options{native} ) {
+	die "Error: must provide valid native!\n";
+}
+
+my @frag_files = @ARGV;
+foreach my $ff (@frag_files) {
+	my $dat_file = "$ff.qual.dat";
+	my $cmd = "r_frag_quality.linuxgccrelease -in:file:native $options{native} -f $ff -out:qual $dat_file";
+	if ( ! -f $dat_file ) {
+		system($cmd);
+
+		# add header
+		open FILE, "<$dat_file" or die $!;
+		open OUT,  ">$dat_file.tmp" or die $!;
+		print OUT join ' ', qw/  size position n_frags rmsd d1 d2  /;
+		print OUT "\n";
+		while ( my $line = <FILE> ) {
+			print OUT $line;
+		}
+		close OUT  or die $!;
+		close FILE or die $!;
+
+		system( "mv $dat_file.tmp $dat_file" );
+	}
+}

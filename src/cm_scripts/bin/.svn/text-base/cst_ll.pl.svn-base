@@ -1,0 +1,194 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use FindBin;
+
+use lib '/work/tex/src/cm_scripts/perl_lib';
+
+use List::Util qw/ sum /;
+use Storable qw/ dclone /;
+use CstUtil qw/ read_csts calc_probability calc_native_probability /;
+use Getopt::Long;
+use File::Basename;
+use Data::Dumper::Simple;
+
+my $native = 0;
+my @cst_files;
+my $barplot = 1;
+&GetOptions(
+	"native=s"  => \$native,
+	"cstfile=s" => \@cst_files,
+	"barplot!"  => \$barplot,
+);
+
+my $storage = {}; # used to store distance information
+foreach my $cst_file (@cst_files) {
+	my $csts = read_csts( $cst_file );
+
+	my $output_tag = join ',', ( basename $native, basename $cst_file );
+	my $data = {};
+	#my $log_probability = calc_probability(
+	#	$native, $csts, {
+	#		storage => $storage,
+	#		maximize_p_native => 0,
+	#	},
+	#);
+	$data->{log_probability} = calc_probability(
+		$native, $csts, {
+			storage => $storage,
+			maximize_p_native => 0,
+		},
+	);
+	$data->{max_weight_log_probability} = calc_probability(
+		$native, $csts, { storage => $storage, maximize_p_native => 1 }
+	);
+	$data->{pk_log_probability} = calc_native_probability(
+		$native, 2.0, { storage => $storage }
+	);
+
+	#my $prior_log_probability = CstUtil::calc_probability_prior(
+	#	$native, {
+	#		storage => $storage,
+	#	},
+	#);
+	#my $prior_log_probability = CstUtil::calc_probability(
+	#	$native, {}, { storage => $storage }
+	#);
+	#$data->{prior_log_probability} = calc_probability(
+	#	$native, {}, { storage => $storage }
+	#);
+
+	my $fixed_sdev_csts       = assign_fixed_sdev( $csts, 2.0 );
+	my $equal_csts            = reweight_equal( $csts );
+	$data->{equal_log_probability} = calc_probability(
+		$native, $equal_csts, { storage => $storage }
+	);
+	$data->{fixed_log_probability} = calc_probability(
+		$native, $fixed_sdev_csts, { storage => $storage }
+	);
+	#my $equal_log_probability = calc_probability(
+	#	$native, $equal_csts, { storage => $storage }
+	#);
+	#my $fixed_log_probability = calc_probability(
+	#	$native, $fixed_sdev_csts, { storage => $storage }
+	#);
+
+	foreach my $k (keys %$data) {
+		$data->{$k} *= -1;
+	}
+
+	#my $data = {
+	#	log_probability       => -1 * $log_probability,
+	#	equal_log_probability => -1 * $equal_log_probability,
+	#	prior_log_probability => -1 * $prior_log_probability,
+	#	fixed_log_probability => -1 * $fixed_log_probability,
+	#};
+
+	if ( $barplot ) {
+		my $bars = make_bars( $data );
+		use List::Util qw/ max /;
+		my $max_width  = max map { length($_) } keys %$data;
+		my $format_str = '%' . $max_width . 's';
+
+		foreach my $key ( sort { $data->{$a} <=> $data->{$b} } keys %$data ) {
+			print join ' ', (
+				sprintf( $format_str, $key ),
+				$bars->{$key},
+				sprintf( "%6.3f", $data->{$key} ),
+			);
+			print "\n";
+		}
+	} else {
+		#print "n_cst_pairs = ", count_pairs( $csts ), "\n";
+		#print "log_probability($output_tag) = $log_probability\n";
+		#print "equal_probability($output_tag) = $equal_log_probability\n";
+		#print "prior_log_probability($output_tag) = $prior_log_probability\n";
+	}
+}
+
+sub make_bars {
+	my $data = shift;
+
+	use List::Util qw/ max min /;
+	my $max = max(values %$data);
+	my $min = min(values %$data);
+	my $max_len = 40;
+	my $scale = $max - $min;
+	my %bars;
+	foreach my $key ( keys %$data ) {
+		my $pct = ($data->{$key} - $min) / ( $max - $min );
+		my $str = '=' . '=' x int( $pct * $max_len );
+		$str .= '>';
+		$str .= ' ' x ( $max_len - length($str) + 2 );
+		$bars{$key} = $str;
+	}
+
+	return \%bars;
+}
+
+sub count_pairs {
+	my $csts = shift;
+
+	my $count = 0;
+	foreach my $resi ( keys %$csts ) {
+	foreach my $resj ( keys %{ $csts->{$resi} } ) {
+		$count++;
+	}
+	}
+	return $count;
+}
+
+sub reweight_equal {
+	my $csts = shift;
+	my $copy = dclone( $csts );
+
+	foreach my $resi ( keys %$copy ) {
+	foreach my $resj ( keys %{ $copy->{$resi} } ) {
+		my $cst_set = $copy->{$resi}{$resj};
+		my $n = scalar(@$cst_set);
+		my $w = 1 / $n;
+		foreach my $cst (@$cst_set) {
+			$cst->{weight} = $w;
+		}
+		my $sum = sum map { $_->{weight} } @$cst_set;
+		if ( abs(1-$sum) > 1e-2 ) {
+			print "early!\n";
+			print "delta = ", 1 - $sum, "\n";
+			use Data::Dumper::Simple;
+			print Dumper( $copy->{$resi}{$resj} );
+			exit 1;
+		}
+	}
+	}
+
+	return $copy;
+}
+
+sub assign_fixed_sdev {
+	my $csts = shift;
+	my $sdev = shift;
+	my $copy = dclone( $csts );
+
+	use List::Util qw/ sum /;
+
+	foreach my $resi ( keys %$copy ) {
+	foreach my $resj ( keys %{ $copy->{$resi} } ) {
+		my $cst_set = $copy->{$resi}{$resj};
+		foreach my $cst (@{$copy->{$resi}{$resj}}) {
+			$cst->{sdev} = $sdev;
+		}
+		my $sum = sum map { $_->{weight} } @{$copy->{$resi}{$resj}};
+		if ( abs(1-$sum) > 1e-2 ) {
+			print "delta = ", 1 - $sum, "\n";
+			print "$resi,$resj\n";
+			print Dumper( $copy->{$resi}{$resj} );
+			print Dumper( $csts->{$resi}{$resj} );
+			exit 1;
+		}
+	}
+	}
+
+	return $copy;
+}

@@ -1,0 +1,187 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use FindBin;
+use lib "$FindBin::Bin/../perl_lib";
+my $protocol_base = "$FindBin::Bin/../protocols";
+
+use Cwd qw/ getcwd abs_path /;
+use alignment;
+
+use Rosetta::Job;
+use Rosetta::Util;
+use Rosetta::TargetFiles;
+use Rosetta::Protocol;
+use Rosetta::align_util qw/ read_alns /;
+
+use File::Path;
+use File::Copy;
+use Getopt::Long;
+use File::Basename;
+
+my %options;
+$options{aln_fn}       = 0;
+$options{fasta}        = 0;
+$options{frag3_fn}     = 0;
+$options{cst_file}     = 0;
+$options{aln_format}   = 'grishin';
+$options{working_dir}  = 'test';
+$options{max_e_value}  = 0.1;
+$options{save_all_out} = 0;
+$options{protocol}     = 'broker_refine7';
+$options{boinc_tag}    = "nmr_cm_broker_refine";
+&GetOptions(
+	\%options,
+	"fasta_fn=s",
+	"silent_file=s",
+	"aln_format=s",
+	"frag3_fn=s",
+	"frag9_fn=s",
+	"cst_file=s",
+	"library_dir=s",
+	"working_dir=s",
+	"protocol=s",
+	"boinc_tag=s",
+	"save_all_out!",
+);
+
+$0 = basename $0;
+my $usage = <<USAGE;
+usage:  $0 [options]
+	-fasta_fn    <fn> (required)
+	-frag3_fn    <fn> (required)
+	-frag9_fn    <fn> (required)
+	-silent_file <fn> (required)
+	-cst_file    <fn> (required)
+	-working_dir <new directory> (required)
+	-protocol    <broker protocol identifier> (optional)
+	-library_dir <dir> (required)
+USAGE
+
+foreach my $req_fn ( qw/ fasta_fn silent_file frag3_fn frag9_fn cst_file / ) {
+	if ( !$options{$req_fn} || ! -e $options{$req_fn} ) {
+		print "given ", $options{$req_fn}, "\n";
+		die "Error: must give -$req_fn!\n";
+	}
+	$options{$req_fn} = abs_path($options{$req_fn});
+}
+mkpath $options{working_dir};
+
+# generate topology and core-files
+my $top_job = Rosetta::Job->new(
+	executable => "/work/tex/src/mini/bin/r_pdb2top.linuxgccrelease",
+	args => "-in:file:silent $options{silent_file} -out:top beta_lowE.top -in:file:silent_struct_type binary",
+	lockfile => "make_top.lock",
+	dir => $options{working_dir},
+	results_file => "beta_lowE.top",
+);
+
+my @jobs;
+if ( $top_job->can_run ) {
+	#$top_job->run_with_message( "making topologies" );
+	push @jobs, $top_job;
+}
+
+my $core_size = 1.5;
+my $core_job = Rosetta::Job->new(
+	executable => "/work/tex/src/mini/bin/r_rmsf.linuxgccrelease",
+	args => "-in:file:silent $options{silent_file} -wRMSD $core_size -rigid:cutoff $core_size -rigid:out core_lowE_$core_size.txt -in:file:silent_struct_type binary",
+	lockfile => "make_core.lock",
+	results_file => "core_lowE_$core_size.txt",
+	dir => $options{working_dir},
+);
+if ( $core_job->can_run ) {
+	#$core_job->run_with_message( "making cores" );
+	push @jobs, $core_job;
+}
+
+Rosetta::Job::run_jobs_in_parallel( \@jobs, 2 );
+
+# set up broker runs
+
+my $setup_str = <<SETUP_STR;
+USE_INPUT_POSE
+
+CLAIMER RigidChunkClaimer
+REGION_FILE core_lowE_$core_size.txt
+END_CLAIMER
+
+CLAIMER TemplateJumpClaimer
+topol_file beta_lowE.top
+END_CLAIMER
+SETUP_STR
+
+if ( $options{protocol} eq 'broker_refine_no_core' ) {
+	my $setup_str = <<SETUP_STR;
+USE_INPUT_POSE
+CLAIMER TemplateJumpClaimer
+topol_file beta_lowE.top
+END_CLAIMER
+SETUP_STR
+}
+
+open FILE, ">$options{working_dir}/setup_broker.tpb" or die $!;
+print FILE $setup_str, "\n";
+close FILE or die $!;
+
+my $target_id = basename($options{fasta_fn},'.fasta');
+my $fns = Rosetta::TargetFiles->new( $target_id, $options{library_dir} );
+foreach my $file ( qw/ frag3_fn frag9_fn cst_file fasta_fn / ) {
+	$fns->value( $file, abs_path($options{$file}) );
+}
+copy( $options{silent_file}, "$options{working_dir}/broker_input.out" );
+system( "gzip $options{working_dir}/broker_input.out" );
+
+$fns->value( 'silent_infile', abs_path("$options{working_dir}/broker_input.out.gz") );
+$fns->value( 'cst_fa_file', abs_path($options{cst_file}) );
+$fns->value( 'broker_setup_file', abs_path("$options{working_dir}/setup_broker.tpb" ) );
+
+my $job_dir = assemble_path( $options{working_dir}, $options{protocol} );
+if ( ! -d $job_dir ) {
+	mkpath( $job_dir );
+	my $round2_protocol = Rosetta::Protocol->new(
+		"$protocol_base/$options{protocol}.template"
+	);
+	$round2_protocol->save_all_out($options{save_all_out});
+	$round2_protocol->boinc_tag( $options{boinc_tag} );
+
+	push @{ $round2_protocol->{extra_files} },
+		map { abs_path($_) }
+		map { assemble_path($options{working_dir},$_) }
+		qw/ core_lowE_1.5.txt beta_lowE.top setup_broker.tpb /;
+
+	# make sure the constraint file gets included otherwise constraints will not
+	# be active
+	push @{ $round2_protocol->{extra_files} }, abs_path( $options{cst_file} );
+
+	$round2_protocol->setup_boinc_job( abs_path($job_dir), $fns );
+}
+
+__END__
+
+my $thread_job = Rosetta::Job->new(
+	executable   => "/work/tex/src/mini/bin/minirosetta.linuxgccrelease",
+	args         => [
+		'-in:file:alignment', $options{aln_fn},
+		'-aln_format', $options{aln_format},
+		'-in:file:template_pdb', @template_pdbs,
+		'-database /work/tex/minirosetta_database',
+		'-in:file:fasta', $options{fasta},
+		'-run:protocol threading',
+		'-out:file:silent $options{silent_file}',
+		'-out:file:silent_struct_type binary',
+		'-in:file:fullatom',
+		'-loops:remodel  quick_ccd -loops:relax no',
+		'-loops:extended -loops:build_initial',
+		'-loops:frag_sizes 3 1',
+		"-loops:frag_files $options{frag3_fn} none",
+		'-in:detect_disulf false -fail_on_bad_hbond false',
+		'-mute all',
+	],
+	lockfile     => "thread.lock",
+	results_file => '$options{silent_file}',
+	dir          => $options{working_dir},
+);
+$thread_job->run_with_message( "constructing threading models" );

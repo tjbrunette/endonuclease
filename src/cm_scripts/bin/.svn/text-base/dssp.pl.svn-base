@@ -1,0 +1,99 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use Getopt::Long;
+use File::Basename;
+
+my %options;
+$options{dssp_binary}  = '/work/tex/src/shareware/dssp/dssp';
+$options{three_state}  = 0;
+&GetOptions(
+	\%options,
+	"dssp_binary=s",
+	"three_state!",
+);
+
+my $dssp_options = ' -na '; # don't calculate solvent accessibility
+
+my @pdb_files = @ARGV;
+foreach my $pdb_file (@pdb_files) {
+    my $dssp_output = `$options{dssp_binary} $dssp_options $pdb_file`;
+    my @output = split /\n/, $dssp_output;
+
+    # Correct DSSP output (shamelessly stolen from dssp_correct.pl)
+    #my $dssp_correct_buf = '';
+    my $dssp_correct_buf = $dssp_output;
+    #my $count = 0;
+    #foreach my $line ( @output ) {
+    #    if ($line=~/^\s\s(...)\s\s(...)(\s.\s[^!].*)/ and  $count==0) {
+    #        $dssp_correct_buf .= "  $1  $2$3\n";
+    #    } elsif ($line=~/^\s\s(...)\s\s(...)(\s.\s[^!].*)/ and $count!=0) {
+    #        my $formatted = sprintf("%3d",$count);
+    #        $dssp_correct_buf .= "  $formatted  $2$3\n";
+    #        $count++;
+    #    }
+    #    elsif ( $line=~/^\s\s(...)\s\s(...)(\s.\s!.*)/ and $count==0 ) {
+    #        print STDERR "CHAIN BREAK $line";
+    #        $count=scalar($1);
+    #    } elsif ( $line=~/^\s\s(...)\s\s(...)\s.\s!.*/ and $count!=0 ) {
+    #        print STDERR "CHAIN BREAK $line";
+    #        #Do nothing
+    #    } elsif ( $line!~/^\s\s(...)\s\s(...)\s.\s[^!].*/ ) {
+    #        $dssp_correct_buf .= $line;
+    #    }
+    #}
+
+    open  FILE, ">$pdb_file.dssp" or die $!;
+    print FILE $dssp_correct_buf;
+    close FILE or die $!;
+
+    # parse the .dssp file into 3-state SS assignment
+	 my @file = split /\n/, $dssp_correct_buf;
+
+    open FILE, ">$pdb_file.ss_dssp" or die $!;
+    print FILE "> $pdb_file dssp-assigned secondary structure\n";
+    my $header_done = 0;
+    foreach my $line (@file) {
+      # Skip the DSSP file header
+		if ( !$header_done ) {
+      	if ( $line =~ /#  RESIDUE AA STRUCTURE/ ) {
+      	  $header_done = 1;
+      	}
+		} else {
+      	my $ss_dssp = substr ($line, 16, 1);
+			if ( $ss_dssp eq ' ' ) { $ss_dssp = 'C'; }
+
+      	my $assignment = &convert_dssp_ss($ss_dssp);
+			if ( $options{three_state} ) {
+      		print FILE $assignment;
+			} else {
+				print FILE $ss_dssp;
+			}
+		}
+    }
+
+    print FILE "\n";
+    close FILE or die $!;
+}
+
+sub convert_dssp_ss {
+    my $ss = shift;
+
+    my $letter;
+    if ($ss eq 'H' || $ss eq 'I' || $ss eq 'G') {
+        $letter = 'H';
+    }
+    elsif ($ss eq 'E' || $ss eq 'B') {
+        $letter = 'E';
+    } else {
+        $letter = 'L';
+    }
+
+    if ( !defined $letter ) {
+        abort("Error: can't determine structure for letter ($ss)\n");
+    }
+
+    return $letter;
+}

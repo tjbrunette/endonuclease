@@ -1,0 +1,174 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use Getopt::Long;
+use File::Basename;
+
+$0 = basename $0;
+
+my @columns;
+my $dirname          = 0;
+my $basename         = 0;
+my $regex_def        = 0;
+my $match_from       = 0;
+my $match_to         = 0;
+my $include_filename = 0;
+my $hack             = 1;
+my @default_columns  = qw/ score rmsd /;
+
+&GetOptions(
+	"column=s"         => \@columns,
+	"dirname"          => \$dirname,
+	"basename"         => \$basename,
+	"regex=s"          => \$regex_def,
+	"match_from=s"     => \$match_from,
+	"match_to=s"       => \$match_to,
+	"include_filename" => \$include_filename,
+	"hack!",           => \$hack,
+);
+
+my $regex;
+if ( $regex_def ) {
+	$regex = qr{ $regex_def };
+}
+
+my $usage = <<USAGE;
+usage: $0 [options] file1 file2 ...
+options:
+  --column <name>    extracts column named name from files (can be repeated)
+  --include_filename includes the name the file from which each line was taken
+  --regex <regex>    only consider lines matching regex
+USAGE
+
+if ( !@columns ) {
+	@columns = @default_columns;
+}
+
+if ( $basename && $dirname ) {
+	die "Must pick one of --basename and --dirname!\n$usage\n";
+}
+
+if ( !@ARGV ) {
+	die "$usage\n";
+}
+
+my $last_header = 0;
+foreach my $fn (@ARGV) {
+	open FILE, "<$fn" or die "Error opening file $fn ($!)";
+
+	my %named_indices;
+
+	while ( my $line = <FILE> ) {
+		if ( $regex_def && $line !~ /$regex_def/ ) {
+			next;
+		}
+		chomp $line;
+		$line = trim_whitespace($line);
+
+		if ( $match_from && $match_to ) {
+			$line =~ s/$match_from/$match_to/g;
+		}
+
+		if ( scalar(keys %named_indices) == 0 ) {
+			%named_indices = %{ named_column_indices( $line ) };
+			if ( scalar keys %named_indices != scalar(@columns) ) {
+				@columns = grep { exists $named_indices{$_} } @columns;
+			}
+			my $header = join ' ', @columns;
+			if ( $include_filename ) {
+				$header .= ' filename';
+			}
+			if ( $header ne $last_header ) {
+				print $header, "\n";
+				$last_header = $header;
+			}
+
+		} else {
+			my $data = extract_named_columns( $line, \@columns, \%named_indices );
+
+			if ( scalar(@$data) == scalar(@columns) ) {
+				if ( $include_filename ) {
+					my $name = $fn;
+					if ( $basename ) {
+						$name = basename $fn;
+					} elsif ( $dirname ) {
+						$name = basename dirname $fn;
+					}
+					push @$data, $name;
+				}
+				my $str = join ' ', ( @$data );
+				print $str, "\n";
+			}
+		}
+	} # line = <FILE>
+
+	close FILE or die $!;
+}
+
+sub has_undefined_values {
+	my $d = shift;
+
+	my @undefined = grep { !defined $_ } @$d;
+	return ( scalar(@undefined) != 0 );
+}
+
+sub extract_named_columns {
+	my $line = shift;
+	my $column_names  = shift;
+	my $named_indices = shift;
+
+	chomp $line;
+
+	my $n_cols = scalar keys %$named_indices;
+
+	my @e = split /\s+/, $line;
+	my @current_data;
+
+	#if ( scalar(@e) != $n_cols ) { return []; }
+
+	foreach my $column (@$column_names) {
+		if ( ! exists $named_indices->{$column} && $column eq 'user_tag' ) {
+			warn "no user_tag, trying user_ta!\n";
+			$column = 'user_ta';
+		}
+
+		if ( exists $named_indices->{$column} ) {
+			push @current_data, $e[ $named_indices->{$column} ];
+		} else {
+			push @current_data, 0.0;
+		}
+	}
+
+	my @u = grep { !defined $_ } @current_data;
+	if ( @u ) {
+		return [];
+	}
+
+	return \@current_data;
+}
+
+sub named_column_indices {
+	my $line = shift;
+	chomp $line;
+	my @e = split /\s+/, $line;
+
+	my %named_indices;
+	my $idx = 0;
+	foreach my $e (@e) {
+		$named_indices{$e} = $idx;
+		$idx++;
+	}
+
+	return \%named_indices;
+}
+
+sub trim_whitespace {
+	my $str  = shift;
+	my $copy = $str;
+
+	$copy =~ s/^\s+//g;
+	$copy =~ s/\s+$//g;
+	return $copy;
+}

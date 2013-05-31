@@ -1,0 +1,90 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use Getopt::Long;
+
+my %options;
+$options{N} = 200;
+$options{column} = 'score';
+$options{silent_file} = 'test.out';
+$options{col_idx} = 0;
+$options{outfile} = 'filtered.out';
+$options{rev}     = 0;
+
+my $usage = <<USAGE;
+options:
+	-N           <integer>
+	-silent_file <filename>
+	-column      <column>
+	-outfile     <filename>
+	-rev
+USAGE
+
+&GetOptions(
+	\%options,
+	'column=s',
+	'silent_file=s',
+	'outfile=s',
+	'N=i',
+	'rev!',
+);
+
+if ( ! -f $options{silent_file} ) {
+	die $usage, "\n";
+}
+
+my @scores;
+open FILE, "<$options{silent_file}" or die $!;
+while ( my $line = <FILE> ) {
+	if ( $line =~ /^SCORE/ && !$options{col_idx} ) {
+		chomp $line;
+		my @d = split /\s+/, $line;
+		$options{col_idx} = 0;
+		for my $d (@d) {
+			if ( $d eq $options{column} ) {
+				last;
+			}
+			$options{col_idx}++;
+		}
+	} elsif ( $line =~ /^SCORE/ ) {
+		# only consider tags with a S_ designation
+		my @d = split /\s+/, $line;
+		my $f = $d[$options{col_idx}];;
+		push @scores, $f;
+	}
+}
+close FILE or die $!;
+
+@scores = sort { $a <=> $b } @scores;
+if ( $options{rev} ) {
+	@scores = reverse @scores;
+}
+
+my $cutoff = $scores[ $options{N} ];
+if ( scalar(@scores) <= $options{N} ) {
+	$cutoff = $scores[-1];
+}
+
+my $print = 1;
+open FILE, "<$options{silent_file}" or die $!;
+open OUT, ">$options{outfile}" or die $!;
+while ( my $line = <FILE> ) {
+	if ( $line =~ /^SCORE:\s+([\-\d\.]+)\s+/ ) {
+		chomp $line;
+		my @d = split /\s+/, $line;
+		if ( $options{rev} ) {
+			$print = ( $d[ $options{col_idx} ] > $cutoff );
+		}
+		else{
+		   	$print = ( $d[ $options{col_idx} ] > $cutoff );
+		}
+		$line .= "\n";
+	}
+
+	if ( $print ) {
+		print OUT $line;
+	}
+}
+close OUT or die $!;
+close FILE or die $!;

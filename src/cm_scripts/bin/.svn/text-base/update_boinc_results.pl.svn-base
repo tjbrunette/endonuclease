@@ -1,0 +1,191 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use Getopt::Long;
+use File::Basename;
+use Sys::Hostname;
+
+$0 = basename $0;
+my $system        = "boinc";
+my $results_dir   = 0;
+my $get_scorefile = 0;
+&GetOptions(
+	"system=s"       => \$system,
+	"dir=s"          => \$results_dir,
+	"get_scorefile!" => \$get_scorefile,
+);
+
+my $usage = <<USAGE;
+usage: $0 submit_file [options]
+	--dir <directory_name>   put results into this directory (default = results)
+	--system <boinc,ralph>   use boinc or ralph
+	--get_scorefile          updates scorefile along with outfile
+USAGE
+
+my $fn = $ARGV[0];
+if ( !$fn || ! -f $fn ) {
+	$usage = join "\n", ("Error with filename: can't find file $fn!\n",$usage);
+	die $usage, "\n";
+}
+
+#my $job_name = get_job_name( str_from_file($fn) );
+my @job_names = @{ get_job_names( str_from_file($fn) ) };
+
+foreach my $job_name (@job_names) {
+	if ( !$results_dir ) {
+		$results_dir = assemble_path( dirname($fn), 'results' )
+	}
+	
+	mkdir_safe($results_dir);
+	sync_results_to_dir( $job_name, $system, $results_dir, $get_scorefile );
+}
+
+sub mkdir_safe {
+	my $dir = shift;
+	mkdir $dir;
+	if ( ! -d $dir ) {
+		die "Error: can't mkdir $dir!\n";
+	}
+}
+
+sub str_from_file {
+	my $fn = shift;
+	open FILE, "<$fn" or die "Error opening file $fn ($!)";
+	my @lines = <FILE>;
+	close FILE or die $!;
+
+	return join '', @lines;
+}
+
+sub get_job_names {
+	my $str = shift;
+	my @lines = split /\n/, $str;
+
+	my @names;
+	foreach my $line (@lines) {
+		if ( $line =~ /name\s*=\s*([\d\w_\-\.]*)\n*/ ) {
+			#return $1;
+			push @names, $1;
+		}
+	}
+
+	if ( scalar(@names) == 0 ) {
+		die "Error: couldn't find job name in string:\n$str\n";
+	}
+
+	return \@names;
+}
+
+sub sync_results_to_dir {
+	my $job_name      = shift;
+	my $system        = shift;
+	my $dest_dir      = shift;
+	my $get_scorefile = shift;
+
+	my $path;
+	my $host = hostname;
+	if ( $system eq 'boinc' ) {
+		$path = "/net/BOINC/results";
+		if ( $host =~ /nrb/ ) {
+			$path = "/net/boinc/ROSETTA/results";
+		}
+	} elsif ( $system eq 'ralph' ) {
+		$path = "/net/RALPH/results";
+	} else {
+		die "Error: unknown system ($system)!\n";
+	}
+
+	my $job_name_short = $job_name;
+	$job_name_short =~ s/_IGNORE_THE_REST//g;
+	my $base_path = join '/', ( $path, substr( $job_name, 0, 8 ) );
+
+	# If SAVE_ALL_OUT was specified, retrieve non-energy cut results
+	my $full_path = join '/', ( $base_path, "$job_name_short*0.out.bz2" );
+	my $full_path_all = join '/', ( $base_path, "$job_name_short*0.all.out.bz2" );
+
+	my @all_results = glob $full_path_all;
+	if (@all_results) {
+		print "Preferring SAVE_ALL_OUT results\n";
+		$full_path = $full_path_all;
+	} 
+
+	my $output = `su - boinc -c 'ls $full_path'`;
+	if ( $host =~ /nrb/ ) {
+		$output = "ssh ws0 'ls $full_path'";
+	}
+	my @matches;
+	while ( $output =~ /($job_name_short.*\.out\.bz2)/g ) {
+		push @matches, $1;
+	}
+
+	if ( scalar(@matches) == 0 ) {
+		my $err = "Error: couldn't find any results for $job_name on $system!\n";
+		$err .= "path = $full_path\n";
+		$err .= "listing = $output\n";
+	}
+
+	if ( scalar(@matches) > 1 ) {
+		print STDERR "Error: multiple files found that match!\n";
+		print STDERR join "\n", @matches;
+		print STDERR "\n";
+
+		my @d;
+		foreach my $match (@matches) {
+			# sort by file size
+			my $size = -s "$base_path/$match";
+			push @d, [ $size, $match ];
+		}
+		print STDERR "size file\n";
+		print STDERR join "\n", map { join ' ', ($_->[0], $_->[1]) } @d;
+		print STDERR "\n";
+		@matches = map { $_->[1] } sort { $b->[0] <=> $a->[0] } @d;
+		@matches = ( $matches[0] );
+		print STDERR "choosing $matches[0]\n based on file size";
+	}
+
+	if ( ! -d $dest_dir ) {
+		die "Error: dest_dir $dest_dir doesn't exist!\n";
+	}
+
+	if ( scalar(@matches) == 0 ) {
+		#print "ls_cmd = $ls_cmd\n";
+		die "Error: no matches for $job_name!\n";
+	}
+
+	if ( $get_scorefile ) {
+		my $match = $matches[0];
+		$match =~ s/\.out\.bz2$/\.sc\.bz2/;
+		push @matches, $match
+	}
+
+	foreach my $match (@matches) {
+		my $sync_cmd = "rsync -Pazv $base_path/$match $dest_dir/";
+		my $cmd = "su boinc -c '$sync_cmd'";
+		if ( $host =~ /nrb/ ) {
+			$cmd = "rsync -PLazv ws0:$base_path/$match $dest_dir/";
+		}
+		$cmd = "rsync -PLazv $base_path/$match $dest_dir/";
+		system( "chmod o+w $dest_dir" );
+		print $cmd, "\n";
+		system($cmd);
+		system( "chmod o-w $dest_dir" );
+	}
+
+	foreach my $match (@matches) {
+		#system( "cd $dest_dir; bunzip2 -f *.bz2" );
+		system( "cd $dest_dir; bunzip2 -f $match" );
+	}
+
+	# make some handy symlinks
+	if ( $get_scorefile && ! -f assemble_path($dest_dir,'scorefile.txt') ) {
+		my $fn = $matches[1];
+		$fn =~ s/\.bz2$//g;
+		system( "cd $dest_dir; ln -s $fn scorefile.txt" );
+	}
+}
+
+sub assemble_path {
+	return join '/', @_;
+}

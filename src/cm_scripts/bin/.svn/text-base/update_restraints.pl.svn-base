@@ -1,0 +1,309 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+$|++;
+
+use FindBin;
+use lib "$FindBin::Bin/../perl_lib/";
+
+use List::Util qw/ sum /;
+use Getopt::Long;
+use Rosetta::Util;
+use Rosetta::Instance;
+
+my %options;
+$options{kappa}         = 0.2;
+$options{gamma}         = 1.0;
+$options{silent_file}   = 0;
+$options{silent_format} = 'binary';
+$options{cst_file}      = 0;
+$options{sel_pct}       = 0.2;
+$options{score_column}  = "score";
+$options{wt_threshold}  = 0.6;
+
+&GetOptions(
+	\%options,
+	"kappa=f",
+	"gamma=f",
+	"silent_file=s",
+	"silent_format=s",
+	"cst_file=s",
+	"sel_pct=f",
+	"score_column=s",
+);
+
+my %mini_options = (
+	mini_prefix => '/work/tex/src/mini/bin',
+	mode        => 'release',
+	compiler    => 'gcc',
+	mini_db     => "/work/tex/minirosetta_database",
+);
+
+# select models from the overall outfile
+if ( ! -f "selected.out" ) {
+	select_models(
+		$options{silent_file},$options{score_column},$options{sel_pct},"selected.out"
+	);
+}
+
+# read in the restraints from the file
+my $restraints = read_restraints($options{cst_file});
+
+# update the weights on the restraints given the distribution of distances in the models
+my %new_restraints = %{ update_restraints(
+	$restraints,'selected.out',$options{silent_format},$options{kappa}
+) };
+
+# write new restraints to file
+my $new_name = $options{cst_file} . '.updated';
+print $new_name, "\n";
+open FILE, ">$new_name" or die $!;
+foreach my $resi ( keys %new_restraints ) {
+foreach my $resj ( keys %{ $new_restraints{$resi} } ) {
+	# make sure weight of sr gaussian is above a threshold
+	my @cst_def   = @{ $new_restraints{$resi}{$resj} };
+	my $sum_sr_wt = sum( map { $_->{weight} } @cst_def );
+	if ( $sum_sr_wt > $options{wt_threshold} ) {
+		print FILE "AtomPair CA $resi CA $resj ";
+		print FILE "SOGFUNC ", scalar(@cst_def);
+		foreach my $cst (@cst_def) {
+			print FILE " ";
+			print FILE join ' ', ( $cst->{mean}, $cst->{sdev}, $cst->{weight} );
+		}
+		print FILE "\n";
+	}
+}
+}
+close FILE or die $!;
+
+sub update_restraints {
+	my $restraints  = shift;
+	my $silent_file = shift;
+	my $format      = shift;
+	my $kappa       = shift;
+
+	my $n_models = count_decoys($silent_file);
+
+	# read ensemble of distances from silent_file
+   my $instance = Rosetta::Instance->new( %mini_options );
+   my $job = $instance->generate_job( "batch_distances" );
+   my $cmd = join ' ', (
+      $job->executable,
+      "-in:file:silent $silent_file -mute all",
+		"-in:file:silent_struct_type $format",
+      "-dist_thresholds 10 ",
+		"-min_seqsep 5",
+   );
+
+	my %contact_counts;
+	foreach my $resi ( grep { !/comments/ } keys %$restraints ) {
+	foreach my $resj ( keys %{$restraints->{$resi}} ) {
+		$contact_counts{$resi}{$resj} = 0;
+	}
+	}
+
+   logger( "reading distances from $silent_file ... " );
+   open DISTANCES, "$cmd | grep CA |";
+	while ( my $line = <DISTANCES> ) {
+		chomp $line;
+   	if ( $line =~ /CA/ ) {
+         my (
+            undef,
+            $resi, $resj,
+            $resi_aa, $resj_aa,
+            $atomi, $atomj,
+            $buriali, $burialj,
+            $dist,
+            $current_id
+         ) = split /\s+/, $line;
+         if ( $atomi =~ /CA/ && $atomj =~ /CA/ && exists $restraints->{$resi}{$resj} ) {
+				my $prior_prob = dgaussian_mixture( $dist, [ { mean => 18.3, sdev => 7.3, weight => 1 } ] );
+				my $sr_prob    = dgaussian_mixture( $dist, $restraints->{$resi}{$resj} );
+				#print "dist = $dist\n";
+				#print "prior_prob = $prior_prob\n";
+				#print "sr_prob    = $sr_prob\n";
+				if ( $sr_prob >= $prior_prob ) {
+					$contact_counts{$resi}{$resj}++;
+				}
+         }
+      }
+	} # line
+	close DISTANCES or die $!;
+   logger( "finished reading distances.\n" );
+
+	# scale each contact count by the number of decoys to get the new weight
+	my %new_restraints;
+	RESI: foreach my $resi ( grep { !/comments/ } keys %$restraints ) {
+	RESJ: foreach my $resj ( keys %{ $restraints->{$resi} } ) {
+		my $old_cst_def  = $restraints->{$resi}{$resj};
+		my @sr_def       = grep { $_->{mean} < 16 } @$old_cst_def;
+		use List::Util qw/ sum /;
+		my $sum_old_wt   = sum( map { $_->{weight} } @sr_def );
+		my $scale_factor = $kappa * $contact_counts{$resi}{$resj} * (1-$kappa) * $sum_old_wt / $n_models;
+		foreach my $cst (@sr_def) {
+			$cst->{weight} *= $scale_factor * $kappa;
+		}
+
+		$new_restraints{$resi}{$resj} = \@sr_def;
+	}
+	}
+
+	#print Dumper(%new_restraints);
+	return \%new_restraints;
+}
+
+sub count_decoys {
+	my $silent_file = shift;
+	my $count = `grep ^SCORE: $silent_file | wc -l`;
+
+	$count = $count - 1;
+	return $count;
+}
+
+sub dgaussian_mixture {
+	my $dist    = shift;
+	my $cst_def = shift;
+
+	my $prob = 0;
+	foreach my $cst ( @$cst_def ) {
+		$prob += $cst->{weight} * dgaussian( $dist, $cst->{mean}, $cst->{sdev} );
+	}
+
+	return $prob;
+}
+
+sub dgaussian {
+   my $value = shift;
+   my $mean  = shift;
+   my $sdev  = shift;
+
+   use List::Util qw/ max /;
+   use constant TINY_FLOAT => 1e-200;
+
+   my $r = abs( $mean - $value );
+
+   use constant sqrt_2pi => 2.50662721600161;
+   my $val = 1 / (sqrt_2pi * $sdev) * exp( -1 * $r * $r / ( 2 * $sdev * $sdev ) );
+
+   return max( $val, TINY_FLOAT );
+}
+
+sub read_restraints {
+	my $fn = shift;
+
+	my %restraints;
+	open FILE, "<$fn" or die $!;
+	while ( my $line = <FILE> ) {
+		chomp $line;
+		if ( $line =~ /^AtomPair\s+(.*)\s+SOGFUNC\s+(\d+)(.*)$/ ) {
+			my $atom_def = $1;
+			my $cst_def  = $3;
+
+			my $resi = 0;
+			my $resj = 0;
+			if ( $atom_def =~ /([\w\d]+)\s+(\d+)\s+([\w\d]+)\s+(\d+)/ ) {
+				my $atomi = $1;
+				my $atomj = $3;
+				if ( $atomi ne 'CA' && $atomj ne 'CA' ) {
+					die "Error: didn't expect to see atom named $atomi or $atomj!\n";
+				}
+				$resi = $2;
+				$resj = $4;
+			}
+			my @cst_defs = grep { length($_) > 0 } split /\s+/, $cst_def;
+			while ( @cst_defs ) {
+				my $mean   = shift @cst_defs;
+				my $sdev   = shift @cst_defs;
+				my $weight = shift @cst_defs;
+
+				push @{ $restraints{$resi}{$resj} }, { mean => $mean, sdev => $sdev, weight => $weight };
+			}
+		} elsif ( $line =~ /^#/ ) {
+			push @{ $restraints{comments} }, $line;
+		}
+	}
+
+	return \%restraints;
+}
+
+sub select_models {
+	my $silent_file = shift;
+	my $score_name  = shift;
+	my $pct_to_sel  = shift;
+	my $outfile     = shift;
+
+	# read scores fast
+	open FILE, "<$silent_file" or die $!;
+	my $col_wanted = -1;
+	my @scores;
+	logger( "reading data from $silent_file ... " );
+	while ( my $line = <FILE> ) {
+		chomp $line;
+		if ( $line =~ /^SCORE:/ ) {
+			if ( $col_wanted == -1 ) {
+				my @score_names = split /\s+/, $line;
+				for my $i ( 0 .. scalar(@score_names)-1 ) {
+					if ( $score_names[$i] eq $score_name ) {
+						$col_wanted = $i;
+					}
+				}
+
+				if ( $col_wanted == -1 ) {
+					die "Error: didn't find score $score_name in $line!\n";
+				}
+			} else {
+				my @data = split /\s+/, $line;
+				push @scores, $data[$col_wanted];
+			}
+		}
+	}
+	close FILE or die $!;
+
+	logger( "done.\n" );
+	# calculate score cutoff
+	@scores = sort { $a <=> $b } @scores;
+	my $idx = int( $pct_to_sel * scalar(@scores) );
+	my $n_models = $idx + 1;
+	my $score_cutoff = @scores[ int($pct_to_sel* scalar(@scores)) ];
+	logger( "selecting $n_models models with max($score_name) = $score_cutoff\n" );
+
+	# select a subset of decoys
+	if ( -f $outfile ) {
+		die "Error: outfile $outfile already exists! Not overwriting!\n";
+	}
+
+	open FILE, "<$silent_file" or die $!;
+	open OUTFILE, ">$outfile" or die $!;
+	my $print = 1;
+	while ( my $line = <FILE> ) {
+		if ( $line =~ /^SCORE:/ ) {
+			chomp $line;
+			my @data = split /\s+/, $line;
+			my $score = $data[$col_wanted];
+			if ( is_numeric($score) && $score > $score_cutoff ) {
+				$print = 0;
+			} else {
+				$print = 1;
+			}
+			$line .= "\n";
+		}
+
+		if ( $print ) {
+			print OUTFILE $line;
+		}
+	}
+	close OUTFILE or die $!;
+	close FILE or die $!;
+}
+
+sub logger {
+	foreach my $msg (@_) {
+		print STDERR $msg;
+	}
+}
+
+sub is_numeric {
+	return ( $_[0] =~ /^[\d\-\.]+$/ );
+}

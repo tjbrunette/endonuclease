@@ -1,0 +1,368 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use Cwd qw/ getcwd abs_path /;
+use File::Basename;
+use List::Util qw/ min max /;
+use constant IMPLAUSIBLY_LARGE_SCORE => 1e7;
+
+use Getopt::Long;
+my %options;
+
+$options{native_id} = 0;
+$options{boinc_dir} = 0;
+$options{dat_fn}    = 0;
+$options{talos_fn}  = 0;
+&GetOptions(
+	\%options,
+	"native_id=s",
+	"boinc_dir=s",
+	"dat_fn=s",
+	"talos_fn=s",
+	"modeller_dir=s",
+);
+
+my $superimpose = "~tex/bin/superimpose.py";
+
+if ( length($options{native_id}) != 5 ) {
+	print "given $options{native_id}!\n";
+	die "Error: invalid option for -native_id!\n";
+}
+
+if ( !$options{boinc_dir} || ! -d $options{boinc_dir} ) {
+	die "Error: invalid option for -boinc_dir!\n";
+}
+
+if ( !$options{modeller_dir} ) {
+	$options{modeller_dir} = "$options{boinc_dir}/../modeller";
+}
+
+if ( ! -d $options{modeller_dir} ) {
+	die "Error: invalid option for -modeller_dir!\n";
+}
+
+if ( $options{dat_fn} ) {
+	open DATA_OUT, ">$options{dat_fn}" or die $!;
+}
+
+my $printed_header = 0;
+my $lockfile = "$options{native_id}.lock";
+if ( -f $lockfile ) {
+	die "Error: already locked with file $lockfile!\n";
+}
+system( "touch $lockfile" );
+
+my $native_pdbid    = lc substr($options{native_id},0,4);
+my $native_chain    = uc substr($options{native_id},4,1);
+
+# get the native, trim the NMR disorder.
+my $native         = $native_pdbid . $native_chain . '.pdb';
+my $trimmed_native = $native_pdbid . $native_chain . '.trim.pdb';
+
+if ( ! -f $native ) {
+	system( "~tex/workspace/scripts/get-pdb.pl $native_pdbid $native_chain" );
+}
+if ( ! -f $trimmed_native ) {
+	system( "~tex/src/cm_scripts/bin/trim_nmr_disorder.pl $native -cutoff 1.5" );
+}
+
+my $fasta_seq      = `pdb2fasta.py $trimmed_native | tail -1`;
+my $seq_len        = length($fasta_seq);
+my $full_fasta_seq = `pdb2fasta.py $native | tail -1`;
+my $full_seq_len   = length($full_fasta_seq);
+
+my @dirs = grep { -d $_ } glob( "$options{boinc_dir}/*" );
+
+foreach my $dir (@dirs) {
+print "$dir\n";
+	if ( -d "$dir/results" && ! -d "$dir/old.results" ) {
+		system( "mv $dir/results $dir/old.results" );
+	}
+
+	my @outfiles = glob("$dir/results/*.out");
+	if ( !@outfiles ) {
+		system( "cd $dir; ~tex/src/cm_scripts/bin/update_boinc_results.pl *.job -get_scorefile" );
+	}
+	my $results_dir = "$dir/results";
+	@outfiles = grep { !/filtered/ } glob("$dir/results/*.out");
+	if ( !@outfiles ) {
+		next;
+	}
+
+	# rescoring step
+	if ( scalar(@outfiles) > 1 ) {
+		print "outfiles:\n", join "\n", @outfiles, "\n";
+		die "Error: too many outfiles in $results_dir!\n";
+	}
+	my $outfile = basename($outfiles[0]);
+
+	my $rescored_outfile = "$outfile.rescored";
+	if ( ! -f "$results_dir/$rescored_outfile" ) {
+		# make a hosts.list file
+		my $hostname = `hostname`;
+		#open FILE, ">$results_dir/hosts.list" or die $!;
+		#print FILE join ' ', ( $hostname, "slots=8", "max_slots=8" );
+		#print FILE "\n";
+
+		#my $cmd = "cd $results_dir; mpirun -np 8 /work/tex/src/mini/bin/score_jd2.mpi.linuxgccrelease -in:file:silent $outfile -out:file:silent $rescored_outfile -in:file:silent_struct_type binary -score:weights score12_full -jd2:mpi_filebuf_jobdistributor -silent_read_through_errors";
+		#print "cmd = $cmd\n";
+		#system( $cmd );
+
+		my $np = 32;
+		my $trimmed_native_path = abs_path($trimmed_native);
+		my $score_cmd = "/work/tex/src/mini/bin/score_jd2.mpi.linuxgccrelease -in:file:silent $outfile -out:file:silent $rescored_outfile -in:file:silent_struct_type binary -score:weights score12_full -jd2:mpi_filebuf_jobdistributor -silent_read_through_errors -mute core.io.silent -evaluation:align_rmsd_target $trimmed_native_path -evaluation:align_rmsd_column native";
+		if ( $options{talos_fn} && -f $options{talos_fn} ) {
+			$score_cmd = join ' ', (
+				$score_cmd, '-evaluation:chemical_shifts', abs_path($options{talos_fn}), 'cs_score'
+			);
+		}
+		my $cmd = "cd $results_dir; smart_mpi.pl -np $np -cmd '$score_cmd'";
+		print "cmd = $cmd\n";
+		system($cmd);
+	}
+
+	my @pdbs = grep { !/low10.pdb/ } glob( "$results_dir/models/*.pdb" );
+	if ( !@pdbs ) {
+		print "making nmr ensemble in $results_dir ... ";
+		#system( "cd $results_dir; ~tex/src/cm_scripts/bin/make_nmr_ensemble.pl -silent *.out -dir models" );
+		system( "cd $results_dir; ~tex/src/cm_scripts/bin/make_nmr_ensemble.pl -silent $rescored_outfile -dir models" );
+		print "done.\n";
+		@pdbs = grep { !/low10.pdb/ } glob( "$results_dir/models/*.pdb" );
+	}
+
+	if ( scalar(@pdbs) == 0 ) {
+		die "Error: no pdbs in $results_dir!\n";
+	}
+
+	my $output_fn = "$results_dir/models2native.super_dat.txt";
+	unlink $output_fn;
+
+	if ( ! -f $output_fn ) {
+		my $super_cmd = join ' ', (
+			"$superimpose -R 1.5 $trimmed_native",
+			@pdbs,
+			" > q 2>$output_fn"
+		);
+		system($super_cmd);
+	}
+
+	my $mean_nres = 0;
+	my $best_nres = 0;
+	my $best_pdb = '';
+	open FILE, "<$output_fn" or die $!;
+	while ( my $line = <FILE> ) {
+		if ( $line =~ /mean_nres:\s+([\d\.]+)/ ) {
+			$mean_nres = $1;
+		}
+		if ( $line =~ /-vs-\s+(\S+):\s+([\d\.]+) over (\d+) residues/ ) {
+			if ($3 > $best_nres) {
+				$best_nres = $3;
+				$best_pdb  = `basename $1`;
+			}
+		}
+	}
+	close FILE or die $!;
+	chomp $best_pdb;
+	my $rigid_nres = 0;
+	open FILE, "<$results_dir/models/model_super_dat.txt" or die $!;
+	while ( my $line = <FILE> ) {
+		if ( $line =~ /mean_nres:\s+([\d\.]+)/ ) {
+			$rigid_nres = $1;
+		}
+	}
+	close FILE or die $!;
+
+	# read the energies into a data structure
+	if ( ! -f "$results_dir/all_scores.dat" ) {
+		system( "cd $results_dir; ~tex/src/cm_scripts/bin/column_extract.pl --regex ^SCORE -col score  $rescored_outfile | grep -v score  > all_scores.dat" );
+	}
+	if ( ! -f "$results_dir/scores.dat" ) {
+		system( "cd $results_dir; cat  all_scores.dat |sort -n | head > scores.dat " );
+	}
+
+	open FILE, "<$results_dir/scores.dat" or die $!;
+	my @scores;
+#	my @cst_scores;
+	while ( my $line = <FILE> ) {
+		chomp $line;
+		my ($score) = split /\s+/, $line;
+
+		if ( abs($score) > IMPLAUSIBLY_LARGE_SCORE ) {
+			next;
+		}
+		push @scores, $score;
+	}
+	close FILE or die $!;
+
+	open FILE, "<$results_dir/all_scores.dat"
+		or die "Can't open file $results_dir/all_scores.dat! ($!)";
+	my @all_scores;
+	while ( my $line = <FILE> ) {
+		chomp $line;
+		my ($score) = split /\s+/, $line;
+
+		if ( abs($score) > IMPLAUSIBLY_LARGE_SCORE ) {
+			next;
+		}
+		push @all_scores, $score;
+	}
+	close FILE or die $!;
+
+	if ( ! -f "$results_dir/decoy_count.txt" ) {
+		system( "grep -c ^SCORE: $results_dir/*.sc > $results_dir/decoy_count.txt" );
+	}
+	my $n_decoys = `cat $results_dir/decoy_count.txt`;
+	my $average_score     = mean(@scores);
+#	my $average_cst_score = mean(@cst_scores);
+	my $mean_score        = mean(@all_scores);
+	my $sdev_score        = sdev(@all_scores);
+	chomp $n_decoys;
+
+	my $rigid_pct_nres = min( $rigid_nres / $full_seq_len, 1.0  );
+	my $pct_nres       = min( $mean_nres  / $seq_len, 1.0 );
+	my $best_pct_nres  = min( $best_nres  / $seq_len, 1.0 );
+	if ( basename($dir) =~ /^([_\d\w]+).*\.([_\d\w]+)\.pctid_([\d\.]+).tmscore_([\d\.]+)/ ) {
+		my $target  = $1;
+		my $aln_id  = $2;
+		my $pct_id  = $3;
+		$pct_id =~ s/\.$//g;
+		my $tmscore = $4;
+		$tmscore =~ s/\.$//g;
+
+		my $modeller_pdb  = "$options{modeller_dir}/$aln_id/$aln_id.modeller.pdb";
+		#print "$modeller_pdb\n";
+		my $modeller_nres = 0;
+		if ( -f $modeller_pdb ) {
+			if ( ! -f "$modeller_pdb.super_dat.txt" ) {
+				my $sup_cmd = join ' ', (
+					"$superimpose -R 1.5 $trimmed_native $modeller_pdb",
+					"> $modeller_pdb.sup.pdb",
+					"2>$modeller_pdb.super_dat.txt",
+				);
+				#print $sup_cmd, "\n";
+				system($sup_cmd);
+			}
+
+			open FILE, "<$modeller_pdb.super_dat.txt" or die $!;
+			while ( my $line = <FILE> ) {
+				if ( $line =~ /mean_nres:\s+([\d\.]+)/ ) {
+					$modeller_nres = $1 / $seq_len;
+				}
+			}
+			close FILE or die $!;
+		}
+
+		my $out_line = '';
+		if ( !$printed_header ) {
+			$out_line .= join ' ', qw/
+				n_decoys tmscore pct_id
+				pct_nres best_nres best_pdb centroid_pdb 
+				pct_nres_models avg_score_top10
+				mean_score sdev_score
+				modeller_pct_nres
+				target aln_id
+			/;
+			$out_line .= "\n";
+			$printed_header = 1;
+		}
+
+		$target =~ s/nmr_control_casd_//g;
+
+		$out_line .= join ' ', (
+			$n_decoys,
+			sprintf( "%6.3f", $tmscore ), sprintf( "%6.3f", $pct_id ),
+			sprintf( "%6.3f", $pct_nres ),
+			sprintf( "%6.3f", $best_pct_nres ),
+			$best_pdb,
+			sprintf( "%6.3f", $rigid_pct_nres ),
+			sprintf( "%6.3f", $average_score ),
+#			sprintf( "%6.3f", $average_cst_score ),
+			sprintf( "%6.3f", $mean_score ),
+			sprintf( "%6.3f", $sdev_score ),
+			sprintf( "%6.3f", $modeller_nres ),
+			$target,
+			$aln_id,
+		);
+		$out_line .= "\n";
+		if ( $options{dat_fn} ) {
+			print DATA_OUT $out_line;
+		} else {
+			print $out_line;
+		}
+	} else {
+		my $target = $options{native_id};
+		my $out_line = '';
+		if ( !$printed_header ) {
+			#print join ' ', qw/ n_decoys target pct_nres pct_nres_models avg_score avg_cst_score /;
+			#print "\n";
+			$out_line .= join ' ', qw/ n_decoys target pct_nres pct_nres_models avg_score avg_cst_score /;
+			$out_line .= "\n";
+			$printed_header = 1;
+		}
+
+		$out_line .= join ' ', (
+			$n_decoys,
+			$target,
+			sprintf( "%6.3f", $pct_nres ),
+			sprintf( "%6.3f", $rigid_pct_nres ),
+			sprintf( "%6.3f", $average_score ),
+#			sprintf( "%6.3f", $average_cst_score ),
+		);
+		$out_line .= "\n";
+		#print "dir = ", basename($dir), "\n";
+		#die "don't recognize $dir!\n";
+		if ( $options{dat_fn} ) {
+			print DATA_OUT $out_line;
+		} else {
+			print DATA_OUT $out_line;
+		}
+	}
+}
+unlink $lockfile;
+
+if ( $options{dat_fn} ) {
+	close DATA_OUT or die $!;
+}
+
+sub get_native {
+	my $target = shift;
+	my %native_dat = qw/
+		casd_cgr26a 2kptA
+		casd_rhodopsin 2ksyA
+		casd_sgr145 2kw5A
+		casd_sr10 2kznA
+		casd_wr73 2kwbA
+		T0475 2k54A
+		T0466 2k5dA
+		T0471 2k4mA
+		T0462 2k5iA
+		T0569 2kywA
+		T0590 2kzwA
+	/;
+
+	return $native_dat{$target};
+}
+
+sub mean {
+	my $tot = 0;
+	foreach my $n (@_) {
+		$tot += $n;
+	}
+
+	return($tot / scalar(@_));
+}
+
+sub sdev {
+	my $mean = mean(@_);
+
+	my $var  = 0;
+	foreach my $n (@_) {
+		$var += ($n - $mean) * ($n - $mean);
+	}
+
+	$var /= scalar(@_);
+
+	return sqrt($var);
+}

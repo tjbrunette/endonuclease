@@ -1,0 +1,396 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use Cwd qw/ abs_path /;
+use FindBin;
+use File::Copy;
+use File::Path;
+use File::Basename;
+use Sys::Hostname;
+
+# path to $0/perl_lib. If you move this script, move perl_lib
+# and protocols as well.
+
+use lib "$FindBin::Bin/perl_lib";
+my $script_dir    = "$FindBin::Bin/bin";
+my $protocol_base = "$FindBin::Bin/protocols";
+
+# verify that necessary modules and external requirements are present
+&include_required_modules;
+&check_external_requirements;
+
+# read options from configuration file
+my $host = hostname;
+print ("hostname $host\n");
+
+my %options;
+my $options_fn = assemble_path( $FindBin::Bin, 'rosetta_cm.conf' );
+if ( ! -f $options_fn ) {
+	use File::Copy qw/ copy /;
+	copy( "$options_fn.example", $options_fn );
+}
+
+$options{method}  = [];
+$options{job_dir} = "boinc_jobs";
+$options{protocol_files}  = assemble_path( cm_base(), "protocols", "protocol_files.conf" );
+$options{make_alignments} = assemble_path( script_dir(), "run-hhsearch.pl" );
+if ( $host =~ /nrb/ ) {
+	$options{make_alignments} = assemble_path( script_dir(), "run-nrb_alignments.pl" );
+}
+Rosetta::Util::load_options_from_file(
+	$options_fn, \%options,
+);
+$options{aln_fn} = 0;
+my $setup_cm_call = join ' ', (abs_path($0),@ARGV);
+
+&GetOptions(
+	\%options,
+	"aln_fn=s",              # optional input alignment file
+	"job_dir=s",             # directory for boinc jobs
+	"boinc_tag=s",           # unique tag for BOINC
+	"targetid=s",            # Target ID, 5 letter code
+	"prefix=s",              # Location of job directory
+	"aln_method=s",          # alignment method
+	"native=s",              # native pdb filename
+	"date_cutoff=s",         # maximum date allowed for including a template
+	"max_e_value=f",         # maximum e-value used for selecting templates
+	"method=s",              # methods to set up
+	"max_templates=i",       # maximum number of templates to use
+	"mini_path=s",           # path to minirosetta binaries
+	"max_template_pct_id=f", # maximum percentage identity between templates
+	"protocol_files=s",      # list of files for protocols
+	"use_hhblits!",          # use hhblits rather than PSI-BLAST for making profiles
+	"hhsearch_path=s",       # hhsearch folder (contains hhmake + hhfilter)
+	"a3m_path=s",            # a3m database location
+	'save_all_out!',         # save all results from BOINC
+	"no_evalue_filter!",     # do e_value filtering
+	"fast_alignment_gen!",   # toggle command for nrb to run only hhsearch
+);
+
+
+$options{fasta_fn} = $ARGV[0];
+if ( !$options{fasta_fn} || ! -f $options{fasta_fn} || $options{fasta_fn} !~ /(.*)\.fasta$/ ) {
+	my $msg = "Error: must provide a .fasta file!\n(given $options{fasta_fn})\n";
+	logger($msg);
+	die $msg;
+}
+$options{fasta_fn} = abs_path( $options{fasta_fn} );
+
+if ( !$options{target_id} ) {
+	$options{target_id} = basename( $options{fasta_fn}, ".fasta" );
+}
+if ( !$options{prefix} ) {
+	$options{prefix} = $options{target_id};
+}
+
+# move these to %options eventually too ...
+my $library_dir             = abs_path( $options{prefix} );
+my $ev_map_fn               = "ev_map.txt";
+my $aln_fn                  = join '.', ( $options{target_id}, "result" );
+my $date_filtered_aln_fn    = join '.', ( $options{target_id}, 'result', 'filt.date' );
+my $ev_filtered_aln_fn      = join '.', ( $options{target_id}, 'result', 'filt.ev' );
+my $valid_filtered_aln_fn   = join '.', ( $options{target_id}, 'result', 'filt.valid' );
+my $pdb_seq_match_aln_fn    = join '.', ( $options{target_id}, 'result', 'filt.pdb_seq_match');
+my $current_filtered_aln_fn = "alignment.filt";
+
+my $cst_fn                  = join '.', ( $options{target_id}, "dist_csts" );
+my $frag_dir                = assemble_path( $library_dir, 'fragments' );
+my $native_dir              = assemble_path( $library_dir, 'native' );
+$options{cst_dir}           = assemble_path( $library_dir, 'constraints' );
+$options{frag3_fn}          = assemble_path( $frag_dir, "aa$options{target_id}.3mers" );
+#$options{frag3_fn}          = assemble_path( $frag_dir, "cs_frags.3mers.gz" );
+$options{aln_dir}           = assemble_path( $library_dir, 'alignment' );
+$options{template_dir}      = assemble_path( $library_dir, 'templates' );
+$options{date_cutoff}       = process_date_cutoff( $options{date_cutoff} );
+$options{logger}            = \&logger;
+
+mkpath $library_dir;
+my $fasta_seq = Rosetta::Sequence::read_protein_fasta_fn($options{fasta_fn});
+
+if ( $fasta_seq =~ /X/ ) {
+	logger( "Error: found an X in sequence $fasta_seq!\n" );
+	die "Error: unrecognized amino acid in fasta_sequence from $options{fasta_fn}!\n";
+}
+
+mkdir_recursive( $library_dir );
+copy_safe( $options{fasta_fn}, $library_dir );
+
+logger( $setup_cm_call );
+logger( "current sequence (" . length($fasta_seq) . " residues):" );
+logger( $fasta_seq );
+logger( "Setting up comparative modeling run with the following options:" );
+logger( options_to_str(\%options) );
+
+# Generate alignments
+my @jobs;
+my $aln_gen_job = Rosetta::Template::make_template_alignments(
+	$options{fasta_fn}, $aln_fn, $options{aln_dir}, \%options
+);
+if ( $options{aln_fn} ) {
+	my $results_fn = $aln_gen_job->results_file;
+	mkdir_safe($options{aln_dir});
+	copy( $options{aln_fn}, assemble_path($options{aln_dir},$results_fn) );
+} else {
+	if ( $host =~ /nrb/ ) {
+		$aln_gen_job->run_with_message("generating alignments");
+	}
+	else{
+		push @jobs, $aln_gen_job;
+	}
+}
+# Make fragments
+my $frag_job = Rosetta::Fragments::make_fragments(
+	$options{fasta_fn}, $frag_dir, \%options
+);
+push @jobs, $frag_job;
+Rosetta::Job::run_jobs_in_parallel( \@jobs, 2, \&logger );
+Rosetta::Fragments::boincify_fragments_in_path( $frag_dir, 'boinc' );
+gzip_files( glob( assemble_path( $frag_dir, "*mers" ) ) );
+
+# Make e-value map in alignment directory
+if ( $host !~ /nrb/ ) {
+	Rosetta::Sequence::make_hhsearch_e_value_map(
+		$options{aln_dir}, $ev_map_fn, $options{max_e_value}
+	);
+}
+
+
+# Filter alignments by date
+if ( $options{date_cutoff} > 0 ) {
+	Rosetta::Sequence::filter_alns_by_date_job(
+		$aln_fn, $date_filtered_aln_fn, $options{aln_dir}, $options{date_cutoff}, \%options
+	)->run_with_message("filtering alignments by date");;
+	unlink( assemble_path($options{aln_dir}, $current_filtered_aln_fn) );
+	make_local_link( $options{aln_dir}, $date_filtered_aln_fn, $current_filtered_aln_fn );
+} else {
+	unlink( assemble_path($options{aln_dir}, $current_filtered_aln_fn) );
+	make_local_link( $options{aln_dir}, $aln_fn, $current_filtered_aln_fn );
+}
+
+# Make sure alignments are present
+if ( -z assemble_path( $options{aln_dir}, $current_filtered_aln_fn ) ) {
+	my $fns = Rosetta::TargetFiles->new(
+		$options{target_id}, $library_dir, $options{protocol_files}
+	);
+	logger( "No valid alignments found for $options{fasta_fn} in $current_filtered_aln_fn!" );
+	logger( "setting up an abrelax run!" );
+	my $method = "abrelax";
+	my $method_dir = assemble_path( $library_dir, $options{job_dir}, $method );
+
+	my $protocol = Rosetta::Protocol->new(
+		assemble_path( $protocol_base, join '.', ( 'abrelax', 'template' ) ),
+		boinc_tag => $options{boinc_tag},
+	);
+	if ( $options{save_all_out} ) {
+		$protocol->save_all_out(1);
+	}
+
+	my $dest_dir = assemble_path(
+		$method_dir, $method, $options{boinc_tag}
+	);
+
+	mkdir_recursive( $dest_dir );
+	$protocol->boinc_tag( $options{boinc_tag} );
+	$protocol->setup_boinc_job( $dest_dir, $fns );
+	logger( "Not proceeding any further due to lack of alignments!" );
+	exit 1;
+}
+
+# predict difficulty of the target
+if ( ! -f "$options{library_dir}/difficulty.txt" ) {
+	system( 
+		"$FindBin::Bin/bin/predict_difficulty.pl",
+		"-aln_fn $options{aln_dir}/alignment.filt",
+		"-fasta_fn $options{aln_dir}/*.fasta > $options{library_dir}/difficulty.txt",
+	);
+}
+
+# Make full-length native (if native given).
+my $native_job = Rosetta::Native::setup_native( \%options, $native_dir );
+if ( $native_job ) {
+	$native_job->run_with_message( "setting up full-length native" );
+}
+
+# Make templates directory. Should be done after all alignments are set up.
+Rosetta::Template::setup_templates(
+	$options{template_dir},
+	assemble_path( $options{aln_dir}, $current_filtered_aln_fn ),
+	\%options,
+	0
+);
+
+# Makes sure the pdb and alignment sequences numbering matches.
+if ( !$options{aln_fn} ) {
+		Rosetta::AlignmentPDBmatchAndFix::make_alignmentMatchPDB(
+		$current_filtered_aln_fn,
+		$pdb_seq_match_aln_fn,
+		$options{template_dir},
+		\%options
+	)->run_with_message( "making alignments and templates match" );
+	unlink( assemble_path($options{aln_dir},$current_filtered_aln_fn) );
+	make_local_link( $options{aln_dir},$pdb_seq_match_aln_fn ,$current_filtered_aln_fn );
+}
+
+# make ev_map using hhsearch from the templates. 
+if (( !$options{aln_fn} )&&( $host =~ /nrb/ )&&(!$options{no_evalue_filter})) {
+	my $make_ev_job = Rosetta::Job->new(
+		executable   => "$script_dir/make_ev_map.pl",
+		results_file => "ev_map.txt",
+		lockfile     => "make_ev_map.lock",
+		dir          => $options{template_dir},
+		args         => [
+			"-pdb_dir",$options{template_dir},
+			"-fasta",$options{fasta_fn},
+			"-n_procs 8"
+		],
+	);
+	$make_ev_job->run_with_message("making evmap_filter\n");
+	copy_safe("$options{template_dir}/ev_map.txt","$options{aln_dir}");
+}
+
+# ev_filter the alignments
+
+if ( !$options{aln_fn}&&(!$options{no_evalue_filter})) {
+	my $filt_by_score = Rosetta::Job->new(
+		executable   => assemble_path(Rosetta::Util::script_dir(),'ruby_scripts/ev_topPercent.rb'),
+		results_file => "$ev_filtered_aln_fn",
+		lockfile     => "filter_by_scores.lock",
+		dir          => $options{aln_dir},
+		args         => [
+			"--ev_map $ev_map_fn",
+			"--alignment_in $current_filtered_aln_fn",
+			"--alignment_out $ev_filtered_aln_fn",
+		],
+	);
+	if ( $filt_by_score->can_run ) {
+		$filt_by_score->run_with_message( "filtering alignments by e-value/probability" );
+	}
+	unlink( assemble_path($options{aln_dir},$current_filtered_aln_fn) );
+	make_local_link( $options{aln_dir}, $ev_filtered_aln_fn,$current_filtered_aln_fn );
+}
+# Add fragments from templates.
+#system( "add_frags_from_templates.pl -aln_fn $current_filtered_aln_fn -template_dir $options{template_dir} -frag_dir $options{library_dir}/fragments" );
+
+# Make constraints from templates.
+mkdir_safe( $options{cst_dir} );
+Rosetta::Constraints::make_constraints(
+	$current_filtered_aln_fn , $options{fasta_fn}, $ev_map_fn,
+	assemble_path( $options{cst_dir}, $cst_fn ), \%options
+)->run_with_message( "making constraints" );
+
+# Make alignment clusters & constraints
+Rosetta::AlignmentClustering::make_alignmentClusters(
+	"alignment.filt",
+	$options{fasta_fn},
+	$options{template_dir},
+	$ev_map_fn,
+	\%options
+)->run_with_message( "making alignment clusters" );
+
+# make constraints for each cluster
+my $clustID = 1;
+my @cluster_jobs;
+while ( -f assemble_path($options{aln_dir},"alignmentCluster_$clustID".".filt") ) {
+	my $temp_aln  = "alignmentCluster_$clustID.filt";
+	my $temp_csts = "alignmentCluster_$clustID.dist_csts";
+	my $job = Rosetta::Constraints::make_constraints(
+		$temp_aln , $options{fasta_fn}, $ev_map_fn, "../constraints/$temp_csts", \%options
+	);
+	push @cluster_jobs, $job;
+	$clustID++;
+}
+Rosetta::Job::run_jobs_in_parallel( \@cluster_jobs, 4 );
+
+# Setup runs for each protocol
+my $fns = Rosetta::TargetFiles->new(
+	$options{target_id}, $library_dir, $options{protocol_files}
+);
+$options{method} = Rosetta::Util::unique($options{method});
+foreach my $method ( @{ $options{method} } ) {
+	my $method_dir = assemble_path( $library_dir, $options{job_dir}, $method );
+
+	my $protocol = Rosetta::Protocol->new(
+		assemble_path( $protocol_base, join '.', ( $method, "template" ) ),
+		boinc_tag => $options{boinc_tag},
+	);
+	if ( $options{save_all_out} ) {
+		$protocol->save_all_out(1);
+	}
+	my $dest_dir = assemble_path( $method_dir, $options{boinc_tag} );
+	logger( "setting up $method in in $method_dir!" );
+
+	mkdir_recursive( $dest_dir );
+	$protocol->boinc_tag( $options{boinc_tag} );
+	$protocol->setup_boinc_job( $dest_dir, $fns );
+}
+
+# Subroutine Definitions
+my $init = 0;
+sub logger {
+	if ( !$init ) {
+		open LOGFILE, ">>$library_dir/setup_cm_log.txt";
+	}
+
+	my $time = localtime();
+	foreach my $msg (@_) {
+		my @lines = split /\n/, $msg;
+		foreach my $line (@lines) {
+			chomp $line;
+			print join ' ', ( $time, $line );
+			print "\n";
+			print LOGFILE join ' ', ( $time, $line );
+			print LOGFILE "\n";
+		}
+	}
+}
+
+sub include_required_modules {
+	# perl5 modules. All of these should be installed in a standard Perl
+	# installation or in cm_scripts/perl_lib.
+	use Cwd;
+	use File::Copy;
+	use File::Path;
+	use Getopt::Long;
+	use File::Basename;
+	use Text::Template;
+
+	# custom modules
+	use hhsearch;
+	use alignment;
+
+	use hhsearch::Util;
+	use Rosetta::Job;
+	use Rosetta::Util;
+	use Rosetta::Native;
+	use Rosetta::Protocol;
+	use Rosetta::Template;
+	use Rosetta::Sequence;
+	use Rosetta::Fragments;
+	use Rosetta::Constraints;
+	use Rosetta::TargetFiles;
+	use Rosetta::AlignmentClustering;
+	use Rosetta::AlignmentPDBmatchAndFix;
+}
+
+sub check_external_requirements {
+	# perl > 5.8.5
+	require 5.8.5;
+}
+
+sub process_date_cutoff {
+	my $date = shift;
+
+	my $cutoff = $date;
+	if ( $date eq 'casp6' ) {
+		$cutoff = 20040501;
+	} elsif ( $date eq 'casp7' ) {
+		$cutoff = 20060501;
+	} elsif ( $date eq 'casp8' ) {
+		$cutoff = 20080501;
+	} elsif ( $date eq 'casp9' ) {
+		$cutoff = 20100425;
+	}
+	return $cutoff;
+}

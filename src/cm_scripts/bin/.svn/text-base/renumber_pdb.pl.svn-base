@@ -1,0 +1,36 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use AtomRecord;
+
+my @atom_records;
+open FILE, "<$ARGV[0]" or die $!;
+while ( my $line = <FILE> ) {
+	if ( $line =~ /^ATOM/ ) {
+		chomp $line;
+		my $rec = AtomRecord->new_from_line($line);
+		push @atom_records, $rec;
+	}
+}
+
+my $resi_idx      = 1;
+my $atom_idx      = 1;
+my $last_resi_idx = $atom_records[0]->{res_no};
+foreach my $record (@atom_records) {
+	if ( $record->{res_no} != $last_resi_idx ) {
+		$resi_idx++;
+		$last_resi_idx = $record->{res_no};
+	}
+
+	$record->{res_no}  = $resi_idx;
+	$record->{atom_no} = $atom_idx;
+
+	$atom_idx++;
+}
+
+
+foreach my $rec (@atom_records) {
+	print $rec->to_string, "\n";
+}

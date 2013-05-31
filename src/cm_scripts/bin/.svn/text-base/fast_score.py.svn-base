@@ -1,0 +1,57 @@
+#! /usr/bin/env python
+import socket
+from argparse import ArgumentParser
+from os import remove, system
+from os.path import exists
+from string import Template
+
+rescore = Template("mpirun -np $slots --hostfile $hosts /work/cmiles/src/rosetta/rosetta_source/bin/score_jd2.mpi.linuxgccrelease -database /work/cmiles/src/rosetta/rosetta_database -jd2:mpi_filebuf_jobdistributor -mute all -keep_input_scores false -silent_read_through_errors -score:weights score12_full -in:file:silent_struct_type binary -out:file:silent_struct_type binary -in:file:silent $silent_in -out:file:silent $silent_out -skip_failed_simulations")
+
+def hostname():
+	'''Returns the hostname of the machine'''
+	return socket.gethostname()
+
+def slots():
+	'''Returns the number of slots to use on the local machine'''
+        if hostname() == 'robetta':
+                return 8
+
+        return 20
+
+def get_hosts(filename):
+	'''Generates MPI hosts file'''
+	with open('hosts.list', 'w') as file:
+		file.write('%s slots=%d max_slots=%d\n' % (hostname(), slots(), slots()))
+
+def is_symmetric(filename):
+	'''Returns true if filename is symmetric, false otherwise'''
+	return '_C1_' not in filename
+
+
+if __name__ == '__main__':
+	parser = ArgumentParser()
+	parser.add_argument('--silent_in', required = True, help = 'Binary silent file input')
+	parser.add_argument('--silent_out', required = True, help = 'Binary silent file output')
+	options = vars(parser.parse_args())
+
+	silent_in = options['silent_in']
+	silent_out = options['silent_out']
+	if exists(silent_out):
+		remove(silent_out)
+
+	hosts_file = 'hosts.list'
+	if exists(hosts_file):
+		remove(hosts_file)
+
+	# Write the MPI hosts file
+	get_hosts(hosts_file)
+
+	# Execute the command
+	params = { 'hosts' : hosts_file, 'slots' : slots(), 'silent_in' : silent_in, 'silent_out' : silent_out }
+	cmd = rescore.safe_substitute(params)
+
+	# Include additional flags for symmetric inputs
+	if is_symmetric(silent_in):
+		cmd += ' -symmetry:symmetry_definition X'
+
+	system(cmd)

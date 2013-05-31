@@ -1,0 +1,61 @@
+#! /usr/bin/env python
+
+def find_repeated(regex, text):
+        import re
+
+        # Offset from beginning of string
+        offset = 0
+        regions = []
+        while True:
+                m = re.search(regex, text[offset:])
+                if not m:
+                        break
+
+                region_start = offset + m.start()
+                region_stop = region_start + len(m.group(0)) - 1
+                regions.append((region_start, region_stop))
+
+                offset = region_stop + 1
+
+        return regions
+
+def find_breaks(ss, elements):
+        import random
+        for i in range(1, len(elements)):
+                prev = elements[i - 1]
+                curr = elements[i]
+
+                # Partition the pair of elements about randomly chosen breakpoint `x`
+                x = random.randint(prev[1] + 1, curr[0] - 1)
+                elements[i - 1] = (prev[0], x - 1)
+                elements[i] = (x, curr[1])
+
+        # Unless `elements` began with a helix or sheet, the first region's
+        # starting index will be incorrect
+        elements[0] = (0, elements[0][1])
+
+        # Similarly, the final region's stop index will be incorrect unless
+        # `elements` ended in a helix or sheet
+        elements[-1] = (elements[-1][0], len(ss) - 2)
+
+def emit(elements):
+	'''Prints chunks in LOOP file format to stdout'''
+        for e in elements:
+                print 'LOOP %d %d %d 0 0' % (e[0], e[1], e[0])
+
+if __name__ == '__main__':
+        import sys
+
+        # For the purposes of this script, helices and sheets can be treated identically
+        ss = sys.stdin.readline().replace('H', 'E')
+
+        # Identify consecutive, non-coil secondary structure elements, sorted by start index
+        elements = find_repeated('E+', ss)
+        elements.sort(key=lambda x: x[0])
+
+        # Iterate over the non-coil secondary structure elements two-at-a-time, randomly
+        # selecting a breakpoint between adjacent elements and adjusting the boundaries
+        find_breaks(ss, elements)
+
+        # Convert to 1-based numbering and write to stdout
+        emit((e[0] + 1, e[1] + 1) for e in elements)
