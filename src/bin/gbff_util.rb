@@ -3,9 +3,9 @@
 #gathers target site data
 def gather_target_sites(all_blast_results,gbff_dir,seq_dir,flanking_res)
   #step1 process blast_results into a hash function which includes the seq_id and an array of blast_items
-  blast_result_hash = blast_results_to_hash(all_blast_results)
+  #blast_result_hash = blast_results_to_hash(all_blast_results)
   #step2 gather endo from gbff file
-  process_all_db(blast_result_hash,gbff_dir,seq_dir,flanking_res)
+  process_all_db(all_blast_results,gbff_dir,seq_dir,flanking_res)
 end
 
 #create a hash function which hashes the seq_id into an array of blast_items
@@ -15,8 +15,7 @@ def blast_results_to_hash(all_blast_results)
     if(blast_result_hash.has_key?(f.name))
       blast_result_hash[f.name].push(f)
     else
-      tmp_array = Array.new
-      tmp_array.push(f)
+      tmp_array = f.clone
       blast_result_hash[f.name] = tmp_array
     end
   end
@@ -89,6 +88,12 @@ def process_all_db(blast_result_hash,gbff_dir,seq_dir,flanking_res)
     #  end
     #end
   end
+  #output all the unseen items in the database to the insufficient DNA database
+    blast_result_hash.each do |key,value|
+        if(value.output_to_db == false)
+            output_blast_hit(value)
+        end
+    end
 end
 
 
@@ -141,48 +146,53 @@ def process_organism_gbff(gbff_file,blast_result_hash,flanking_res,fna_hash)
   organism_done = false
   while(organism_done == false)
     if(gbff_file.eof? == true)
-      print("partial organism encountered at end of file. Quiting")
-      Process.exit()
-    end
-    line = gbff_file.gets
-    position = line.split()
-    if(position[0] == "ORIGIN")
-      dna_seq = process_ORIGIN(gbff_file)
+      print("partial organism encountered at end of file.")
       organism_done = true
-    end
-    if(position[0] == "CONTIG")
-      if fna_hash.has_key?(accession)
-        dna_seq = fna_hash[accession]
-      else
-        dna_seq = ""
-      end
-      organism_done = true
-    end
-    if(position[0] == "ACCESSION")
-      accession = process_ACCESSION(line)
-    end
-    if(position[0] == "exon")
-      if(position.size() > 1)
-        organism_data.push(process_exon(line))
-        organism_data_type.push("exon")
-      end
-    end
-    if(position[0] == "CDS" && position.size > 1 && (line[0..7] != "        "))
-      #lineNumb = gbff_file.lineno
-      gene = process_CDS(line,gbff_file)
-      if(gene != nil)
-        organism_data.push(gene)
-        organism_data_type.push("gene")
-      else
-        #gbff_file.rewind
-        #(lineNumb).times{gbff_file.gets}
+    else 
         line = gbff_file.gets
-      end
+        position = line.split()
+        if(position[0] == "ORIGIN")
+            dna_seq = process_ORIGIN(gbff_file)
+            organism_done = true
+        end
+        if(position[0] == "CONTIG")
+            if fna_hash.has_key?(accession)
+                dna_seq = fna_hash[accession]
+            else
+                dna_seq = ""
+            end
+        organism_done = true
+        end
+        if(position[0] == "ACCESSION")
+            accession = process_ACCESSION(line)
+        end
+        if(position[0] == "exon")
+            if(position.size() > 1)
+                organism_data.push(process_exon(line))
+                organism_data_type.push("exon")
+            end
+        end
+        if(position[0] == "CDS" && position.size > 1 && (line[0..7] != "        "))
+            #lineNumb = gbff_file.lineno
+            gene = process_CDS(line,gbff_file)
+            if(gene != nil)
+                organism_data.push(gene)
+                organism_data_type.push("gene")
+            else
+                #gbff_file.rewind
+                #(lineNumb).times{gbff_file.gets}
+                line = gbff_file.gets
+            end
+        end
     end
   end
   for i in 0..(organism_data.size()-1)
     if(organism_data_type[i] == "gene")
       if(blast_result_hash.key?(organism_data[i].name)||(organism_data[i].known_endo))
+          #tracks which items from the blast DB have been found.
+          if(blast_result_hash.key?(organism_data[i].name))
+              blast_result_hash[organism_data[i].name].output_to_db = true
+          end
         endo_inserted = false
         if((i-1)>=0 && (i<organism_data_type.size()-1))
           if(organism_data_type[i-1] == "exon" && organism_data_type[i+1] == "exon")
@@ -291,7 +301,8 @@ def process_CDS(line,gbff_file)
       proteinid = position[1][1..position[1].size-3]
     end
     if((position[0].lstrip == "/product")||(position[0].lstrip == "/note"))
-      if(position[1][1..9] == "LAGLIDADG"||position[1][1..9] == "LAGLIDAGD")
+        if(position[1].include?("LAGLIDAGD")||position[1].include?("LAGLIDADG")) 
+      #if(position[1][1..9] == "LAGLIDADG"||position[1][1..9] == "LAGLIDAGD")
         known_endo = true
       end
     end
@@ -352,7 +363,7 @@ def process_endo(preExon,postExon,gene,dna_seq,accession,flanking_res,ambig)
   end
   upSeq = ""
   downSeq = ""
-  if(dna_seq.size != 0)
+  if((dna_seq.size != 0) && (upSeq_start<dna_seq.size) && (downSeq_start < dna_seq.size))
     upSeq = dna_seq[upSeq_start..upSeq_end]
     downSeq = dna_seq[downSeq_start..downSeq_end]
   end
@@ -376,6 +387,11 @@ def output_endo_proteins(endo_proteins,flanking_res)
     output_endo(endo,flanking_res)
   end
 end
+#output blast hit
+def output_blast_hit(blast_hit)
+    endo = Endo_info.new(blast_hit.name,"","","","","0","0",blast_hit.seq.gsub("-",""),true,"blastFound")
+    output_endo(endo,"")
+end
 
 #output endo
 def output_endo(endo,flanking_res)
@@ -390,7 +406,7 @@ def output_endo(endo,flanking_res)
   insufficientDNA = false
   if endo.ambig == true
     dir_name = "endo_ambig/#{endo_name}"
-    if((endo.upseq.size()<flanking_res.to_i)||(endo.downseq.size()<flanking_res.to_i))
+    if((endo.upseq.size()<flanking_res.to_i)||(endo.downseq.size()<flanking_res.to_i)||flanking_res.to_i == 0)
       dir_name = "endo_insufficient_DNA/#{endo_name}"
       insufficientDNA = true
     end

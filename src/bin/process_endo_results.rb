@@ -3,7 +3,7 @@
 #match_ambig_2_closestNonAmbig()
 def match_ambig_2_closestNonAmbig(blast_dir,basepath)
   #construct nonAmbig blast db and store with nonAmbig
-  construct_nonAmbig_blastdb(blast_dir)
+  #construct_nonAmbig_blastdb(blast_dir)
   blast_each_ambig(basepath)
   construct_pssm_each_nonAmbig()
   identify_target_each_ambig(basepath)
@@ -41,8 +41,10 @@ def blast_each_ambig(basepath)
   proteins=Dir.glob("*")
   proteins.each do |f|
     Dir.chdir(f)
-    print("#{basepath}/run-psiblast.pl seq_aa.fasta --db ../../endo_nonAmbig/endoBlastdb --n_rounds 3")
-    system("#{basepath}/run-psiblast.pl seq_aa.fasta --db ../../endo_nonAmbig/endoBlastdb --n_rounds 3")
+    if(!File.exists?("seq_aa.fasta.3.psiblast"))
+        print("#{basepath}/run-psiblast.pl seq_aa.fasta --db ../../endo_nonAmbig/endoBlastdb --n_rounds 3")
+        system("#{basepath}/run-psiblast.pl seq_aa.fasta --db ../../endo_nonAmbig/endoBlastdb --n_rounds 3")
+    end
     Dir.chdir("..")
   end
   Dir.chdir("..")
@@ -88,28 +90,48 @@ def identify_target_each_ambig(basepath)
   ambig_dir = "endo_ambig"
   numb_blast_hits = 3
   top_hits = Dir.glob("#{ambig_dir}/*/seq_aa.fasta.3.psiblast")
+  e_value = BigDecimal.new("9E999") #Very high e_value so all items are read
   top_hits.each do |f|
-    tmp_blast_results = read_psiblast(f)
+    blast_results_hash = read_psiblast(f,e_value)
     upSeq_target_dna = "#{File.dirname(f)}/upSeq_target_dna.fasta"
     downSeq_target_dna = "#{File.dirname(f)}/downSeq_target_dna.fasta"
-    #if fewer than 2 blast hits this would give an error
-    if(tmp_blast_results.size() <= numb_blast_hits)
-      numb_blast_hits = tmp_blast_results.size()
+    #get all keys. Put in array. Sort array. If top key print out A. If top 3 print out Y
+    blast_e_vals = Array.new
+    blast_results_hash.each_value do |blast_hash_v|
+        blast_e_val = blast_hash_v.e_val
+        blast_e_vals.push(blast_e_val)
     end
-    for i in 0..(numb_blast_hits-1) do
-      blast_name =  tmp_blast_results.at(i).name
-      blast_e_val =  tmp_blast_results.at(i).e_val
-      upSeq_dna_fasta = "#{File.dirname(f)}/upSeq_dna.fasta"
-      downSeq_dna_fasta = "#{File.dirname(f)}/downSeq_dna.fasta"
-      upSeq_template_pssm = "endo_nonAmbig/#{tmp_blast_results.at(i).name}/upSeq_target_dna.fasta.pssm"
-      downSeq_template_pssm = "endo_nonAmbig/#{tmp_blast_results.at(i).name}/downSeq_target_dna.fasta.pssm"
-      upSeq_out = "#{File.dirname(f)}/upSeq_#{blast_name}_#{blast_e_val}.out"
-      downSeq_out = "#{File.dirname(f)}/downSeq_#{blast_name}_#{blast_e_val}.out"
-      #print("#{basepath}/pssm -s #{upSeq_dna_fasta} -p #{upSeq_template_pssm} -mute > #{upSeq_out}\n")
-      system("#{basepath}/pssm -s #{upSeq_dna_fasta} -p #{upSeq_template_pssm} -mute > #{upSeq_out}")
-      #print("#{basepath}/pssm -s #{downSeq_dna_fasta} -p #{downSeq_template_pssm} -mute > #{downSeq_out}\n")
-      system("#{basepath}/pssm -s #{downSeq_dna_fasta} -p #{downSeq_template_pssm} -mute > #{downSeq_out}")
-      if(i == 0)#best target case
+    blast_e_vals.sort!
+    top_eval = blast_e_vals[0]
+    top_3_eval = blast_e_vals[blast_e_vals.size-1]
+    if(blast_e_vals.size > 3)
+        top_3_eval = blast_e_vals[2]
+    end
+    blast_results_hash.each_value do |blast_hash_v|
+      blast_name =  blast_hash_v.name
+      blast_e_val =  blast_hash_v.e_val
+      ct = 1
+      while((ct <= 3) && (ct <= blast_results_hash.size))
+          ct+=1
+        if(blast_e_val <= top_3_eval)
+            upSeq_dna_fasta = "#{File.dirname(f)}/upSeq_dna.fasta"
+            downSeq_dna_fasta = "#{File.dirname(f)}/downSeq_dna.fasta"
+            upSeq_template_pssm = "#{blast_name}/upSeq_target_dna.fasta.pssm"
+            downSeq_template_pssm = "#{blast_name}/downSeq_target_dna.fasta.pssm"
+            upSeq_out = "#{File.dirname(f)}/upSeq_#{File.basename(blast_name)}_#{blast_e_val}.out"
+            downSeq_out = "#{File.dirname(f)}/downSeq_#{File.basename(blast_name)}_#{blast_e_val}.out"
+        #print("#{basepath}/pssm -s #{upSeq_dna_fasta} -p #{upSeq_template_pssm} -mute > #{upSeq_out}\n")
+            system("#{basepath}/pssm -s #{upSeq_dna_fasta} -p #{upSeq_template_pssm} -mute > #{upSeq_out}")
+        #print("#{basepath}/pssm -s #{downSeq_dna_fasta} -p #{downSeq_template_pssm} -mute > #{downSeq_out}\n")
+            system("#{basepath}/pssm -s #{downSeq_dna_fasta} -p #{downSeq_template_pssm} -mute > #{downSeq_out}")
+        end
+      end
+      if(blast_e_val <= top_eval)#best case
+        fl_top_e_val = File.open("#{File.dirname(f)}/top_e_val","w")
+        fl_top_e_val << "#{top_eval}\n"
+        fl_top_e_val.close
+        upSeq_out = "#{File.dirname(f)}/upSeq_#{File.basename(blast_name)}_#{blast_e_val}.out"
+        downSeq_out = "#{File.dirname(f)}/downSeq_#{File.basename(blast_name)}_#{blast_e_val}.out"
         upSeq_target_dna_fasta = "upSeq_target_dna.fasta"
         downSeq_target_dna_fasta = "downSeq_target_dna.fasta"
         extract_pred_target_DNA(downSeq_out,"#{File.dirname(f)}/#{downSeq_target_dna_fasta}")
@@ -124,17 +146,20 @@ def extract_pred_target_DNA(pred_file_name,targetDna_file_name)
   pred_file = File.new(pred_file_name,'r')
   last_seq = ""
   proteinName = ""
+  score = ""
   while(line = pred_file.gets())
     position = line.split(" ")
     if(position.size()>2)
       if(position[2][0..3] ==">ref")
         proteinName = position[2]
         last_seq = position[1]
+        score = position[0]
       end
     end
   end
   targetDna_file = File.new(targetDna_file_name,"w")
   targetDna_file << "#{proteinName}\n"
+  targetDna_file << "#{score}\n"
   targetDna_file << "#{last_seq}\n"
   targetDna_file.close()
 end
